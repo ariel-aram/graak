@@ -849,6 +849,11 @@ function createAsymmetric({ native, Buffer, stream, toBytes, hashName, out, conc
 	const noContext = () => codeError(Error, "ERR_CRYPTO_OPERATION_FAILED", "Context parameter is unsupported");
 	const notForKeyType = () => codeError(Error, "ERR_OSSL_EVP_OPERATION_NOT_SUPPORTED_FOR_THIS_KEYTYPE", "error:03000096:digital envelope routines::operation not supported for this keytype");
 	const invalidDigest = () => codeError(Error, "ERR_OSSL_INVALID_DIGEST", "error:1C80007A:Provider routines::invalid digest");
+	/* Node's OpenSSL provider refuses BLAKE2 as the digest for RSA and classic DSA signing (ECDSA is not restricted
+	 * the same way, but that needs a digest the native host's mbedTLS-backed signer can compute internally, which
+	 * BLAKE2 is not, so it still falls through to the host's own "Invalid digest" below). */
+	const isBlake2Digest = (name) => name === "blake2b512" || name === "blake2s256";
+	const digestNotAllowed = () => codeError(Error, "ERR_OSSL_DIGEST_NOT_ALLOWED", "error:1C8000AE:Provider routines::digest not allowed");
 
 	const signOptions = (key) => {
 		const parsed = parseInput(key, { wantPrivate: true });
@@ -887,11 +892,18 @@ function createAsymmetric({ native, Buffer, stream, toBytes, hashName, out, conc
 				if (algorithm !== null && algorithm !== undefined) throw codeError(Error, "ERR_OSSL_INVALID_DIGEST", "error:1C80007A:Provider routines::invalid digest");
 				return new Uint8Array(native.eddsaSign(special.type, special.okp.seed, data));
 			}
-			return dsaSign(special.dsa, digestOf(algorithm, oneShot), data, dsaEncoding);
+			const dsaDigest = digestOf(algorithm, oneShot);
+			if (isBlake2Digest(dsaDigest)) throw digestNotAllowed();
+			return dsaSign(special.dsa, dsaDigest, data, dsaEncoding);
 		}
 		if (context) throw noContext();
 		const material = nativeKey(parsed, true);
-		let signature = native.pkSignEx(digestOf(algorithm, oneShot), material.data, material.passphrase, data, padding, saltLength === -1 ? -1 : saltLength);
+		const digest = digestOf(algorithm, oneShot);
+		if (isBlake2Digest(digest)) {
+			const keyType = (material.info ?? infoOf(material.data, material.passphrase, true)).type;
+			if (keyType !== "ec") throw digestNotAllowed();
+		}
+		let signature = native.pkSignEx(digest, material.data, material.passphrase, data, padding, saltLength === -1 ? -1 : saltLength);
 		const info = material.info ?? (parsed.keyObject ? parsed.keyObject._asym.info : null);
 		if (dsaEncoding === "ieee-p1363") {
 			const keyInfo = info ?? infoOf(material.data, material.passphrase, true);
@@ -916,16 +928,30 @@ function createAsymmetric({ native, Buffer, stream, toBytes, hashName, out, conc
 				if (algorithm !== null && algorithm !== undefined) throw codeError(Error, "ERR_OSSL_INVALID_DIGEST", "error:1C80007A:Provider routines::invalid digest");
 				return native.eddsaVerify(special.type, special.okp.pub, data, toBytes(signature));
 			}
-			return dsaVerify(special.dsa, digestOf(algorithm, oneShot), data, toBytes(signature), options.dsaEncoding ?? "der");
+			const dsaDigest = digestOf(algorithm, oneShot);
+			if (isBlake2Digest(dsaDigest)) {
+				if (oneShot) throw digestNotAllowed();
+				return false;
+			}
+			return dsaVerify(special.dsa, dsaDigest, data, toBytes(signature), options.dsaEncoding ?? "der");
 		}
 		if (context) throw noContext();
 		const material = nativeKey(parsed, false);
 		let bytes = toBytes(signature);
+		const digest = digestOf(algorithm, oneShot);
+		let info = material.info ?? null;
+		if (isBlake2Digest(digest)) {
+			info ??= infoOf(material.data, material.passphrase, false);
+			if (info.type !== "ec") {
+				if (oneShot) throw digestNotAllowed();
+				return false;
+			}
+		}
 		if ((options.dsaEncoding ?? "der") === "ieee-p1363") {
-			const info = material.info ?? infoOf(material.data, material.passphrase, false);
+			info ??= infoOf(material.data, material.passphrase, false);
 			if (info.type === "ec") bytes = dsaRawToDer(bytes);
 		}
-		return native.pkVerifyEx(digestOf(algorithm, oneShot), material.data, data, bytes, options.padding === RSA_PSS ? 1 : 0, options.saltLength ?? -2);
+		return native.pkVerifyEx(digest, material.data, data, bytes, options.padding === RSA_PSS ? 1 : 0, options.saltLength ?? -2);
 	};
 
 	class Sign extends stream.Writable {

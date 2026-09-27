@@ -121,5 +121,14 @@ Independent gaps can be worked at the same time by separate agents, each in its 
 
 ## Open work
 
-TLS client options (`ca`, `cert`/`key`, `servername`, ALPN, `rootCertificates`); Brotli and Zstd;
-`crypto` DH/ECDH, primes, X509; HTTP/2; `v8.Serializer`; `URLPattern`; libuv subset on Windows. The legacy Windows path comes first.
+TLS client options, Brotli/Zstd, `crypto` DH/ECDH/primes/X509, HTTP/2, `v8.Serializer`, `URLPattern`, the libuv subset on
+Windows, cluster, wasi, repl and inspector are all closed; see the README's per-module rows for what each one covers and its
+own small known gaps. `createSign`/`createVerify`/`crypto.sign`/`crypto.verify` with a BLAKE2 digest now match Node for RSA
+and classic DSA (both reject it); ECDSA with a BLAKE2 digest is the one piece still open, since Node itself signs and
+verifies with it but the native host's mbedTLS-backed signer has no BLAKE2 in its digest table to do the same.
+
+What is genuinely still absent, not just narrowed: `node:sqlite` user-defined functions, extensions and `backup()`;
+`node:test`'s `mock.module` (Node needs `--experimental-test-module-mocks` for it too); the inspector's `Profiler`,
+`HeapProfiler` and `Debugger` domains (quickjs has no debugger protocol or profiler to back them); and native addon
+loading on a static host (no dynamic loader there — the packager falls back to a dynamic host automatically). The legacy
+Windows path comes first.
