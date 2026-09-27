@@ -7,6 +7,7 @@ export * from "./DenoBundler";
 export * from "./DenoProject";
 export * from "./LegacyRuntimeAssets";
 export * from "./LegacyTranspiler";
+export * from "./NativeAddonCompiler";
 export * from "./NodeRuntime";
 export * from "./PolicyEnforcer";
 export * from "./PortablePackager";

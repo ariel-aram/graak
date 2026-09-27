@@ -126,6 +126,14 @@ export declare class BinaryPackager {
      */
     private static rebuildV8Addons;
     /**
+     * A dependency that ships only a `binding.gyp` and C/C++ source -- no prebuilt `.node` for any
+     * platform -- cannot be `require()`d as-is: nothing was ever placed at the path its own `index.js`
+     * loads. This compiles it here, against the Node-API headers the native host itself implements
+     * (`quickjs/native/napi.c`), so the result loads exactly the way any other addon does. See
+     * NativeAddonCompiler for the toolchain and the node-gyp / direct-compile fallback it tries.
+     */
+    private static compileSourceAddons;
+    /**
      * On Windows Vista and 7, redirects the few imports a prebuilt addon (or a DLL it ships) needs that
      * those systems lack, to compatibility DLLs shipped beside it. See Win7Compat.
      */

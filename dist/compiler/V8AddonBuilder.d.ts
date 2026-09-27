@@ -2,14 +2,47 @@ import { TargetDevice } from "../structures";
 import type { ArchiveEntry } from "./Archive";
 /** Whether an addon was compiled against V8 itself (and so cannot load outside Node.js as-is). */
 export declare function isV8Addon(file: string): boolean;
-type GypValue = string | number | boolean | null | GypValue[] | {
+export type GypValue = string | number | boolean | null | GypValue[] | {
     [key: string]: GypValue;
 };
-type GypDict = {
+export type GypDict = {
     [key: string]: GypValue;
 };
 /** gyp files are Python dict literals: single or double quotes, `#` comments, trailing commas. */
 export declare function parseGyp(text: string): GypDict;
+export interface GypTargetSettings {
+    name: string;
+    type: string;
+    sources: string[];
+    includeDirs: string[];
+    defines: string[];
+    cflags: string[];
+    cflagsC: string[];
+    cflagsCc: string[];
+    ldflags: string[];
+    libraries: string[];
+    dependencies: string[];
+    dependentIncludeDirs: string[];
+    dependentDefines: string[];
+    gypDir: string;
+}
+export interface Vars {
+    OS: string;
+    target_arch: string;
+    [key: string]: string;
+}
+export interface Toolchain {
+    cc: string;
+    cxx: string;
+    dlltool?: string;
+    windows: boolean;
+    os: "linux" | "win";
+    arch: "x64" | "ia32";
+}
+export declare const TOOLCHAINS: Partial<Record<TargetDevice, Toolchain>>;
+/** Where the host is musl-based (Alpine, iSH), addons are musl-linked, and are built with musl.cc's toolchains. */
+export declare const MUSL_TOOLCHAINS: Partial<Record<TargetDevice, Toolchain>>;
+export declare function hasTool(tool: string): boolean;
 export interface V8AddonPackage {
     /** Absolute directory of the package that owns the addon. */
     packageDir: string;
@@ -58,20 +91,19 @@ export declare class V8AddonBuilder {
     static replace(entries: ArchiveEntry[], pkg: V8AddonPackage, built: V8BuildResult, packageArchiveDir: string): void;
     /** Archive directory of a package, from the archive path of one of its files. */
     static archiveDirOf(addonPath: string): string;
-    private static topLevelVariables;
+    static topLevelVariables(gyp: GypDict): Record<string, string>;
     private static expand;
-    private static resolveTarget;
+    static resolveTarget(block: GypDict, gypFile: string, vars: Vars, packageDir: string): GypTargetSettings;
     /** `deps/zlib.gyp:zlib` -> the settings of that target in that file. */
-    private static resolveDependency;
+    static resolveDependency(spec: string, packageDir: string, vars: Vars): GypTargetSettings;
     private static findPackage;
     private static findNan;
     /**
      * Windows addons import their Node-API functions from a named module. Naming the host's own
      * executable makes the loader bind them to the running Graak host, which exports them.
      */
-    private static writeImportLibrary;
+    static writeImportLibrary(dir: string, toolchain: Toolchain, apiDir: string): string;
     private static cacheKey;
 }
 export declare function copyAddon(from: string, to: string): void;
-export {};
 //# sourceMappingURL=V8AddonBuilder.d.ts.map

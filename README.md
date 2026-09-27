@@ -23,6 +23,7 @@
    - [Databases](#databases)
    - [Native addons (Node-API)](#native-addons-node-api)
    - [Addons written against V8 or NAN](#addons-written-against-v8-or-nan)
+   - [Addons that ship only source (no prebuilt `.node` at all)](#addons-that-ship-only-source-no-prebuilt-node-at-all)
    - [Windows 7, Vista and XP](#windows-7-vista-and-xp)
 8. [Package managers](#package-managers)
 9. [The Node.js engine](#the-nodejs-engine)
@@ -415,6 +416,34 @@ Said plainly: a V8 binary with no findable source stops the build naming the pac
 (`actions` and unusual expansions stop the build); it is the API addons use, not all of V8, so a gap is an ordinary
 compile error; property interceptors are modelled with a JavaScript Proxy; and a static host cannot `dlopen`, so this
 applies wherever a dynamic host exists.
+
+### Addons that ship only source (no prebuilt `.node` at all)
+
+A dependency that installs straight from git, or one nobody has run `npm install` against on this machine, is just a
+`binding.gyp` and `.c`/`.cpp` files: no `build/Release/*.node` anywhere, for any platform. `graak compile` notices this
+during project collection (a package with a `binding.gyp`, or `"gypfile": true`, and no matching prebuilt) and compiles
+it before packaging, with `NativeAddonCompiler` (`src/compiler/NativeAddonCompiler.ts`):
+
+1. When the target is the machine's own OS and architecture and `node-gyp` plus Python are on `PATH`, that is tried
+   first (`node-gyp rebuild`), because it is what the package's own install step would have run.
+2. Otherwise -- a cross build (a different target, or a musl host), or node-gyp/Python missing -- the same `binding.gyp`
+   reader V8AddonBuilder uses reads the target settings, and the target's own `cc`/`c++` compiles the sources directly
+   against the vendored Node-API headers (`quickjs/native/include/`), the same headers and flags
+   `test/fixtures/napi/addon.c` is hand-compiled with in the test suite. No V8 shim is involved here: the source is
+   already Node-API, only unbuilt, so it needs nothing else. The result is a `.node` that imports plain `napi_*`
+   functions, placed exactly where the package's own `index.js` expects it.
+
+Verified with a from-source fixture addon (the same one used to verify the Node-API host itself) shipped as a
+dependency with a `binding.gyp` and no prebuilt anything: `graak compile` compiles it and the packaged output produces
+output identical to Node.js running the same source, with no Node.js on the target.
+
+Limits: Linux (glibc and musl, native and cross via mingw's counterpart toolchains) is verified end to end; Windows
+cross-compilation of a plain from-source addon reuses V8AddonBuilder's import-library trick (an addon's `napi_*` imports
+are bound to the running `graak-c.exe`) but was not run under Wine in this session -- do that before relying on it for a
+Windows target. `binding.gyp` support is the same subset as V8AddonBuilder's (see above): dependent static libraries and
+`OS`/`target_arch` conditions work; `actions` and unusual gyp expansions stop the build naming what, rather than
+guessing. A package with genuinely no toolchain wired up for the target (see `TOOLCHAINS`/`MUSL_TOOLCHAINS` in
+`V8AddonBuilder.ts`) is reported as such.
 
 ### Windows 7, Vista and XP
 

@@ -23,6 +23,7 @@ __exportStar(require("./DenoBundler"), exports);
 __exportStar(require("./DenoProject"), exports);
 __exportStar(require("./LegacyRuntimeAssets"), exports);
 __exportStar(require("./LegacyTranspiler"), exports);
+__exportStar(require("./NativeAddonCompiler"), exports);
 __exportStar(require("./NodeRuntime"), exports);
 __exportStar(require("./PolicyEnforcer"), exports);
 __exportStar(require("./PortablePackager"), exports);

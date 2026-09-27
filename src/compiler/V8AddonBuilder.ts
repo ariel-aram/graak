@@ -51,8 +51,8 @@ export function isV8Addon(file: string): boolean {
 
 /* ---- gyp ------------------------------------------------------------------------------------ */
 
-type GypValue = string | number | boolean | null | GypValue[] | { [key: string]: GypValue };
-type GypDict = { [key: string]: GypValue };
+export type GypValue = string | number | boolean | null | GypValue[] | { [key: string]: GypValue };
+export type GypDict = { [key: string]: GypValue };
 
 /** gyp files are Python dict literals: single or double quotes, `#` comments, trailing commas. */
 export function parseGyp(text: string): GypDict {
@@ -140,7 +140,7 @@ export function parseGyp(text: string): GypDict {
 	return root as GypDict;
 }
 
-interface GypTargetSettings {
+export interface GypTargetSettings {
 	name: string;
 	type: string;
 	sources: string[];
@@ -157,7 +157,7 @@ interface GypTargetSettings {
 	gypDir: string;
 }
 
-interface Vars {
+export interface Vars {
 	OS: string;
 	target_arch: string;
 	[key: string]: string;
@@ -219,7 +219,7 @@ function collectSettings(
 
 /* ---- toolchains ----------------------------------------------------------------------------- */
 
-interface Toolchain {
+export interface Toolchain {
 	cc: string;
 	cxx: string;
 	dlltool?: string;
@@ -228,7 +228,7 @@ interface Toolchain {
 	arch: "x64" | "ia32";
 }
 
-const TOOLCHAINS: Partial<Record<TargetDevice, Toolchain>> = {
+export const TOOLCHAINS: Partial<Record<TargetDevice, Toolchain>> = {
 	[TargetDevice.LinuxModernX64]: {
 		cc: "x86_64-linux-gnu-gcc",
 		cxx: "x86_64-linux-gnu-g++",
@@ -279,7 +279,7 @@ const TOOLCHAINS: Partial<Record<TargetDevice, Toolchain>> = {
 };
 
 /** Where the host is musl-based (Alpine, iSH), addons are musl-linked, and are built with musl.cc's toolchains. */
-const MUSL_TOOLCHAINS: Partial<Record<TargetDevice, Toolchain>> = {
+export const MUSL_TOOLCHAINS: Partial<Record<TargetDevice, Toolchain>> = {
 	[TargetDevice.LinuxModernX64]: {
 		cc: "x86_64-linux-musl-gcc",
 		cxx: "x86_64-linux-musl-g++",
@@ -303,7 +303,7 @@ const MUSL_TOOLCHAINS: Partial<Record<TargetDevice, Toolchain>> = {
 	},
 };
 
-function hasTool(tool: string): boolean {
+export function hasTool(tool: string): boolean {
 	return spawnSync("sh", ["-c", `command -v ${tool}`], { encoding: "utf-8" }).status === 0;
 }
 
@@ -607,7 +607,7 @@ export class V8AddonBuilder {
 		return addonPath.slice(0, at + marker.length) + rest.slice(0, depth).join("/");
 	}
 
-	private static topLevelVariables(gyp: GypDict): Record<string, string> {
+	public static topLevelVariables(gyp: GypDict): Record<string, string> {
 		const out: Record<string, string> = {};
 		const variables = gyp.variables;
 		if (variables && typeof variables === "object" && !Array.isArray(variables)) {
@@ -639,7 +639,7 @@ export class V8AddonBuilder {
 		return out;
 	}
 
-	private static resolveTarget(block: GypDict, gypFile: string, vars: Vars, packageDir: string): GypTargetSettings {
+	public static resolveTarget(block: GypDict, gypFile: string, vars: Vars, packageDir: string): GypTargetSettings {
 		const gypDir = dirname(gypFile);
 		const into: Partial<Record<(typeof SETTING_KEYS)[number], string[]>> = {};
 		const dependent: GypDict[] = [];
@@ -668,7 +668,7 @@ export class V8AddonBuilder {
 	}
 
 	/** `deps/zlib.gyp:zlib` -> the settings of that target in that file. */
-	private static resolveDependency(spec: string, packageDir: string, vars: Vars): GypTargetSettings {
+	public static resolveDependency(spec: string, packageDir: string, vars: Vars): GypTargetSettings {
 		const [file, name] = spec.split(":");
 		const gypFile = resolve(vars.module_root_dir ?? packageDir, file);
 		if (!existsSync(gypFile)) throw new RuntimeError(`binding.gyp depends on '${spec}', but ${file} does not exist.`);
@@ -700,7 +700,7 @@ export class V8AddonBuilder {
 	 * Windows addons import their Node-API functions from a named module. Naming the host's own
 	 * executable makes the loader bind them to the running Graak host, which exports them.
 	 */
-	private static writeImportLibrary(dir: string, toolchain: Toolchain, apiDir: string): string {
+	public static writeImportLibrary(dir: string, toolchain: Toolchain, apiDir: string): string {
 		const names = new Set<string>();
 		for (const header of ["js_native_api.h", "node_api.h"]) {
 			const text = readFileSync(join(apiDir, header), "utf-8").replace(/\n/g, " ");

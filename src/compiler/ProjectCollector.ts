@@ -20,6 +20,15 @@ export interface NativeAddon {
 	info: BinaryInfo | null;
 }
 
+export interface SourceOnlyAddon {
+	/** Archive directory of the owning package (e.g. "node_modules/some-native-thing"). */
+	archiveDir: string;
+	/** Real, on-disk directory holding the package's `binding.gyp`. */
+	sourceDir: string;
+	/** Package name as it appears under node_modules. */
+	name: string;
+}
+
 export interface CollectedProject {
 	root: string;
 	name: string;
@@ -27,6 +36,11 @@ export interface CollectedProject {
 	entry: string;
 	entries: ArchiveEntry[];
 	nativeAddons: NativeAddon[];
+	/**
+	 * A dependency that ships a `binding.gyp` but no prebuilt `.node` for any platform: it must be
+	 * compiled from source before the archive can load it. See NativeAddonCompiler.
+	 */
+	sourceOnlyAddons: SourceOnlyAddon[];
 	/** Highest `engines.node` lower bound across the bundle, if any. */
 	minNode: string | null;
 	usesBunApis: string[];
@@ -61,6 +75,16 @@ const BUN_GLOBALS_PATTERN = /\bBun\.[a-zA-Z]|["']bun:(?!sqlite["'])[a-z]/;
 
 function toPosix(p: string): string {
 	return p.split(sep).join("/");
+}
+
+/** Archive directory of a package, from the archive path of one of its files (e.g. its `binding.gyp` or `.node`). */
+export function packageArchiveDirOf(path: string): string {
+	const marker = "node_modules/";
+	const at = path.lastIndexOf(marker);
+	if (at < 0) return dirname(path);
+	const rest = path.slice(at + marker.length).split("/");
+	const depth = rest[0].startsWith("@") ? 2 : 1;
+	return path.slice(0, at + marker.length) + rest.slice(0, depth).join("/");
 }
 
 export function isInside(child: string, parent: string): boolean {
@@ -163,12 +187,23 @@ export class ProjectCollector {
 		collector.addEngines(pkg);
 
 		const rawName = typeof pkg.name === "string" ? pkg.name : basename(root);
+		const nodeArchiveDirs = new Set(collector.nativeAddons.map((a) => packageArchiveDirOf(a.path)));
+		const sourceOnlyAddons: SourceOnlyAddon[] = [];
+		const seenArchiveDirs = new Set<string>();
+		for (const gyp of collector.gypFiles) {
+			const archiveDir = packageArchiveDirOf(gyp.dest);
+			// A package that already ships a matching prebuilt `.node` needs no from-source build.
+			if (seenArchiveDirs.has(archiveDir) || nodeArchiveDirs.has(archiveDir)) continue;
+			seenArchiveDirs.add(archiveDir);
+			sourceOnlyAddons.push({ archiveDir, sourceDir: dirname(gyp.abs), name: basename(archiveDir) });
+		}
 		return {
 			root,
 			name: rawName.replace(/^@[^/]+\//, "").replace(/[^a-zA-Z0-9._-]/g, "-") || "app",
 			entry: toPosix(relative(root, entryReal)),
 			entries: collector.entries,
 			nativeAddons: collector.nativeAddons,
+			sourceOnlyAddons,
 			minNode: collector.minNode,
 			usesBunApis: collector.usesBunApis,
 			usesBunGlobals: collector.usesBunGlobals,
@@ -178,6 +213,8 @@ export class ProjectCollector {
 
 	private readonly entries: ArchiveEntry[] = [];
 	private readonly nativeAddons: NativeAddon[] = [];
+	/** `binding.gyp` files seen under a dependency, {dest: archive path, abs: on-disk path}. */
+	private readonly gypFiles: Array<{ dest: string; abs: string }> = [];
 	private readonly usesBunApis: string[] = [];
 	private readonly usesBunGlobals: string[] = [];
 	private minNode: string | null = null;
@@ -212,6 +249,10 @@ export class ProjectCollector {
 				// Unreadable addon: reported with unknown info
 			}
 			this.nativeAddons.push({ path: dest, info });
+		} else if (!isProjectFile && basename(dest) === "binding.gyp") {
+			// A dependency's own source, not the project's: a project that vendors a binding.gyp for
+			// something else is not asking Graak to compile it.
+			this.gypFiles.push({ dest, abs });
 		} else if (isProjectFile && SOURCE_EXTENSIONS.has(extname(dest)) && stats.size < 4 * 1024 * 1024) {
 			const text = readFileSync(abs, "utf-8");
 			if (BUN_API_PATTERN.test(text)) {

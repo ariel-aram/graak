@@ -1,8 +1,9 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.V8AddonBuilder = void 0;
+exports.V8AddonBuilder = exports.MUSL_TOOLCHAINS = exports.TOOLCHAINS = void 0;
 exports.isV8Addon = isV8Addon;
 exports.parseGyp = parseGyp;
+exports.hasTool = hasTool;
 exports.copyAddon = copyAddon;
 const node_child_process_1 = require("node:child_process");
 const node_crypto_1 = require("node:crypto");
@@ -192,7 +193,7 @@ function collectSettings(block, vars, into, dependent) {
             collectSettings(branch, vars, into, dependent);
     }
 }
-const TOOLCHAINS = {
+exports.TOOLCHAINS = {
     [structures_1.TargetDevice.LinuxModernX64]: {
         cc: "x86_64-linux-gnu-gcc",
         cxx: "x86_64-linux-gnu-g++",
@@ -242,7 +243,7 @@ const TOOLCHAINS = {
     },
 };
 /** Where the host is musl-based (Alpine, iSH), addons are musl-linked, and are built with musl.cc's toolchains. */
-const MUSL_TOOLCHAINS = {
+exports.MUSL_TOOLCHAINS = {
     [structures_1.TargetDevice.LinuxModernX64]: {
         cc: "x86_64-linux-musl-gcc",
         cxx: "x86_64-linux-musl-g++",
@@ -272,7 +273,7 @@ const HOST_EXE_NAME = "graak-c.exe";
 class V8AddonBuilder {
     /** Whether V8 addons can be built for this target at all (needs the target's cross toolchain). */
     static supports(target, libc) {
-        return libc === "musl-dynamic" ? target in MUSL_TOOLCHAINS : target in TOOLCHAINS;
+        return libc === "musl-dynamic" ? target in exports.MUSL_TOOLCHAINS : target in exports.TOOLCHAINS;
     }
     /** Groups the project's V8 addons by owning package. `entries` are what the archive will contain. */
     static find(entries) {
@@ -369,7 +370,7 @@ class V8AddonBuilder {
     static build(options) {
         const { pkg, target } = options;
         const log = options.onLog ?? (() => { });
-        const toolchain = options.libc === "musl-dynamic" ? MUSL_TOOLCHAINS[target] : TOOLCHAINS[target];
+        const toolchain = options.libc === "musl-dynamic" ? exports.MUSL_TOOLCHAINS[target] : exports.TOOLCHAINS[target];
         const meta = structures_1.TARGET_METADATA_MAP[target];
         if (!toolchain) {
             throw new structures_1.RuntimeError(`${pkg.name} is a native addon compiled against V8, and Graak builds those from source with the ` +

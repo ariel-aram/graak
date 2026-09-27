@@ -31,6 +31,7 @@ import { DenoBundler } from "./DenoBundler";
 import { DenoProject } from "./DenoProject";
 import { LEGACY_ASSET_DIR, LegacyRuntimeAssets } from "./LegacyRuntimeAssets";
 import { LegacyTranspiler } from "./LegacyTranspiler";
+import { NativeAddonCompiler } from "./NativeAddonCompiler";
 import { MIN_SEA_NODE_VERSION, NodeRuntime } from "./NodeRuntime";
 import { type PackageManager, PolicyEnforcer } from "./PolicyEnforcer";
 import { PortablePackager } from "./PortablePackager";
@@ -341,6 +342,9 @@ export class BinaryPackager {
 				const { required, optional } = classifyNativeAddons(project.nativeAddons.map((a) => a.path));
 				// Deno.dlopen loads a shared library at run time, which a static host cannot do any more than an addon.
 				if (denoUsesFfi) required.set("Deno FFI (Deno.dlopen)", []);
+				// A dependency that ships only source is compiled below (once the libc for this build is settled),
+				// but it will need to dlopen just like a prebuilt one, so it counts here already.
+				for (const addon of project.sourceOnlyAddons) required.set(addon.name, [`${addon.archiveDir}/build/Release`]);
 				let nativeLibc = options.nativeLibc;
 				if (required.size && !QuickJsPackager.loadsAddons(target, nativeLibc ?? "musl")) {
 					const names = [...required.keys()].join(", ");
@@ -394,6 +398,8 @@ export class BinaryPackager {
 				// With the host settled, addons built against V8 are rebuilt for it, then the bundle is checked.
 				await BinaryPackager.rebuildV8Addons(project, target, { ...options, nativeLibc }, warnings, log);
 				lap("Rebuilding V8 addons");
+				BinaryPackager.compileSourceAddons(project, target, { ...options, nativeLibc }, warnings, log);
+				lap("Compiling native addons that shipped only source");
 				BinaryPackager.applyWin7Compat(project, target, options, warnings, log);
 				lap("Patching addons for Windows 7");
 				BinaryPackager.checkNativeAddons(project.nativeAddons, target, options, warnings, "native");
@@ -733,6 +739,34 @@ export class BinaryPackager {
 					`V8 layer for ${target}. The prebuilt binary it shipped was not used.`
 			);
 		}
+	}
+
+	/**
+	 * A dependency that ships only a `binding.gyp` and C/C++ source -- no prebuilt `.node` for any
+	 * platform -- cannot be `require()`d as-is: nothing was ever placed at the path its own `index.js`
+	 * loads. This compiles it here, against the Node-API headers the native host itself implements
+	 * (`quickjs/native/napi.c`), so the result loads exactly the way any other addon does. See
+	 * NativeAddonCompiler for the toolchain and the node-gyp / direct-compile fallback it tries.
+	 */
+	private static compileSourceAddons(
+		project: ReturnType<typeof ProjectCollector.collect>,
+		target: TargetDevice,
+		options: BuildOptions,
+		warnings: string[],
+		log: (message: string) => void
+	): void {
+		if (!project.sourceOnlyAddons.length) return;
+		for (const addon of project.sourceOnlyAddons) {
+			const built = NativeAddonCompiler.build({ addon, target, libc: options.nativeLibc, onLog: log });
+			const path = `${addon.archiveDir}/${built.relativePath}`;
+			project.entries.push({ path, source: built.file, mode: 0o755 });
+			project.nativeAddons.push({ path, info: BinaryInspector.inspect(built.file) });
+			warnings.push(
+				`${addon.name} ships only source (a binding.gyp, no prebuilt .node for any platform), so it was ` +
+					`compiled from source for ${target}.`
+			);
+		}
+		project.sourceOnlyAddons = [];
 	}
 
 	/**
