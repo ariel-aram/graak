@@ -489,6 +489,22 @@ point, with every module's cached file and every npm package's directory, and Gr
 - **Which targets Deno covers.** `graak info <target>` and `graak targets` say whether `deno compile` builds a target
   itself (`$canPackageOnDeno` says it from a bot). For those five, either tool works; for the others Graak is the only
   way to a Deno program on that device.
+- **Go shared libraries work through the same `Deno.dlopen` path as C, unmodified.** `go build -buildmode=c-shared`
+  produces an ordinary `.so`/`.dll`/`.dylib` plus a C header: cgo's `_cgo_`-prefixed runtime glue stays internal to
+  the library, and each `//export`ed function is a plain C ABI symbol (extern "C", no name mangling) — the same
+  shape `Deno.dlopen` already loads for a hand-written C library, so `fg_ffi.c`'s `dlopen`/`dlsym`/libffi call path
+  needed no change to support it (verified in `test/goFfi.test.ts` by building a real cgo library and calling it
+  under the packaged host, comparing against real Deno). Two things to build one: it needs `CGO_ENABLED=1` and a C
+  compiler on the *build* machine (never on the device the Graak binary ships to), and once a program calls into it
+  the Go runtime's own goroutine scheduler and GC threads start inside the process — leave the library loaded for
+  the process's life rather than closing it, since Go's runtime does not support being unloaded from a process
+  (`Deno.dlopen(...).close()` on a Go library is undefined). Memory ownership follows the same rule as any C FFI
+  call: a pointer a Go function returns (typically from `C.CString`, which uses C's `malloc`) must be freed with
+  whatever the library itself exports for that purpose (its own `C.free`-wrapping export), not with a function on
+  the caller's side, since freeing across two different allocators is undefined behaviour whenever they differ. No
+  legacy-Windows-specific `libgcc` caveat applies beyond the ones dynamic linking already has (see "Native addons"
+  above): `-buildmode=c-shared` output links against the platform's C runtime the same way any other dynamically
+  linked C library does.
 
 ```sh
 graak compile main.ts --target win-legacy-x64                      # Deno program for Windows 7, no Deno on the device
