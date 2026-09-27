@@ -188,6 +188,14 @@ export class ProjectCollector {
 
 		const rawName = typeof pkg.name === "string" ? pkg.name : basename(root);
 		const nodeArchiveDirs = new Set(collector.nativeAddons.map((a) => packageArchiveDirOf(a.path)));
+		// The package name a prebuilt native addon actually came from, for the case below: a platform-specific
+		// optional dependency (e.g. "@lmdb/lmdb-linux-x64") carries the real ".node", not the package with the
+		// "binding.gyp" ("lmdb" itself), which only needs the gyp file to build for platforms with no such prebuilt.
+		// packageArchiveDirOf's own return value already is "node_modules/<name>" (or "node_modules/@scope/name"),
+		// so the package name is what follows that marker -- no filesystem read needed (the dest path is relative).
+		const nativeAddonPackageNames = new Set(
+			[...nodeArchiveDirs].map((dir) => dir.slice(dir.lastIndexOf("node_modules/") + "node_modules/".length))
+		);
 		const sourceOnlyAddons: SourceOnlyAddon[] = [];
 		const seenArchiveDirs = new Set<string>();
 		for (const gyp of collector.gypFiles) {
@@ -195,6 +203,14 @@ export class ProjectCollector {
 			// A package that already ships a matching prebuilt `.node` needs no from-source build.
 			if (seenArchiveDirs.has(archiveDir) || nodeArchiveDirs.has(archiveDir)) continue;
 			seenArchiveDirs.add(archiveDir);
+			// Nor does one whose own optional/regular dependencies already resolved to a package that provided a
+			// prebuilt: a platform package picked for this build stands in for the binding.gyp build.
+			const ownPkg = readJson(join(dirname(gyp.abs), "package.json")) ?? {};
+			const depNames = [
+				...Object.keys((ownPkg.optionalDependencies as Record<string, string>) ?? {}),
+				...Object.keys((ownPkg.dependencies as Record<string, string>) ?? {}),
+			];
+			if (depNames.some((n) => nativeAddonPackageNames.has(n))) continue;
 			sourceOnlyAddons.push({ archiveDir, sourceDir: dirname(gyp.abs), name: basename(archiveDir) });
 		}
 		return {

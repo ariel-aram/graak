@@ -138,6 +138,12 @@ class ProjectCollector {
         collector.addEngines(pkg);
         const rawName = typeof pkg.name === "string" ? pkg.name : (0, node_path_1.basename)(root);
         const nodeArchiveDirs = new Set(collector.nativeAddons.map((a) => packageArchiveDirOf(a.path)));
+        // The package name a prebuilt native addon actually came from, for the case below: a platform-specific
+        // optional dependency (e.g. "@lmdb/lmdb-linux-x64") carries the real ".node", not the package with the
+        // "binding.gyp" ("lmdb" itself), which only needs the gyp file to build for platforms with no such prebuilt.
+        // packageArchiveDirOf's own return value already is "node_modules/<name>" (or "node_modules/@scope/name"),
+        // so the package name is what follows that marker -- no filesystem read needed (the dest path is relative).
+        const nativeAddonPackageNames = new Set([...nodeArchiveDirs].map((dir) => dir.slice(dir.lastIndexOf("node_modules/") + "node_modules/".length)));
         const sourceOnlyAddons = [];
         const seenArchiveDirs = new Set();
         for (const gyp of collector.gypFiles) {
@@ -146,6 +152,15 @@ class ProjectCollector {
             if (seenArchiveDirs.has(archiveDir) || nodeArchiveDirs.has(archiveDir))
                 continue;
             seenArchiveDirs.add(archiveDir);
+            // Nor does one whose own optional/regular dependencies already resolved to a package that provided a
+            // prebuilt: a platform package picked for this build stands in for the binding.gyp build.
+            const ownPkg = readJson((0, node_path_1.join)((0, node_path_1.dirname)(gyp.abs), "package.json")) ?? {};
+            const depNames = [
+                ...Object.keys(ownPkg.optionalDependencies ?? {}),
+                ...Object.keys(ownPkg.dependencies ?? {}),
+            ];
+            if (depNames.some((n) => nativeAddonPackageNames.has(n)))
+                continue;
             sourceOnlyAddons.push({ archiveDir, sourceDir: (0, node_path_1.dirname)(gyp.abs), name: (0, node_path_1.basename)(archiveDir) });
         }
         return {
