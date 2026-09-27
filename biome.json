@@ -1,92 +1,76 @@
 {
-	"$schema": "https://biomejs.dev/schemas/2.5.13/schema.json",
-	"vcs": {
-		"enabled": true,
-		"clientKind": "git",
-		"useIgnoreFile": true
-	},
-	"files": {
-		"includes": [
-			"src/**/*.ts",
-			"test/**/*.ts",
-			"tools/**/*.js",
-			"quickjs/runtime/*.js",
-			"!quickjs/runtime/intl-*.js",
-			"!quickjs/runtime/segmenter-tables.js",
-			"package.json",
-			"tsconfig.json",
-			"biome.json"
-		]
-	},
-	"formatter": {
-		"enabled": true,
-		"indentStyle": "tab",
-		"lineWidth": 120,
-		"lineEnding": "auto"
-	},
-	"linter": {
-		"enabled": true,
-		"rules": {
-			"preset": "recommended",
-			"complexity": {
-				"noStaticOnlyClass": "off",
-				"noBannedTypes": "off"
-			},
-			"style": {
-				"noParameterAssign": "off",
-				"noNonNullAssertion": "off"
-			},
-			"suspicious": {
-				"noExplicitAny": "off"
-			},
-			"correctness": {
-				"noUnusedImports": "warn",
-				"noUnusedVariables": "warn"
-			}
-		}
-	},
-	"javascript": {
-		"formatter": {
-			"quoteStyle": "double",
-			"trailingCommas": "es5"
-		}
-	},
-	"assist": {
-		"enabled": true,
-		"actions": {
-			"source": {
-				"organizeImports": "on"
-			}
-		}
-	},
-	"overrides": [
-		{
-			"includes": ["package.json", "tsconfig.json", "biome.json"],
-			"formatter": {
-				"indentStyle": "space",
-				"indentWidth": 2
-			}
-		},
-		{
-			"includes": ["tools/**/*.js"],
-			"linter": {
-				"rules": {
-					"style": {
-						"useConst": "off",
-						"noParameterAssign": "off"
-					},
-					"suspicious": {
-						"noRedeclare": "off",
-						"noExplicitAny": "off"
-					}
-				}
-			}
-		},
-		{
-			"includes": ["quickjs/runtime/*.js"],
-			"linter": {
-				"enabled": false
-			}
-		}
-	]
+  "$schema": "https://biomejs.dev/schemas/2.5.14/schema.json",
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true
+  },
+  "files": {
+    "includes": ["src/**/*.ts", "test/**/*.ts", "tools/**/*.js", "package.json", "tsconfig.json", "biome.json"]
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "tab",
+    "lineWidth": 120,
+    "lineEnding": "auto"
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "recommended",
+      "complexity": {
+        "noStaticOnlyClass": "off",
+        "noBannedTypes": "off"
+      },
+      "style": {
+        "noParameterAssign": "off",
+        "noNonNullAssertion": "off"
+      },
+      "suspicious": {
+        "noExplicitAny": "off"
+      },
+      "correctness": {
+        "noUnusedImports": "warn",
+        "noUnusedVariables": "warn"
+      }
+    }
+  },
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "double",
+      "trailingCommas": "es5"
+    }
+  },
+  "assist": {
+    "enabled": true,
+    "actions": {
+      "source": {
+        "organizeImports": "on"
+      }
+    }
+  },
+  "overrides": [
+    {
+      "includes": ["package.json", "tsconfig.json", "biome.json"],
+      "formatter": {
+        "indentStyle": "space",
+        "indentWidth": 2
+      }
+    },
+    {
+      "includes": ["tools/**/*.js"],
+      "linter": {
+        "rules": {
+          "style": {
+            "useConst": "off",
+            "noParameterAssign": "off"
+          },
+          "suspicious": {
+            "noRedeclare": "off",
+            "noExplicitAny": "off"
+          }
+        }
+      }
+    }
+  ]
 }

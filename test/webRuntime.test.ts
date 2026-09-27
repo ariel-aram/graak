@@ -1,12 +1,15 @@
 import assert from "node:assert/strict";
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
-import nodeCrypto from "node:crypto";
+import crypto from "node:crypto";
 import { copyFileSync, cpSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { BinaryPackager, TargetDevice } from "../dist/index.js";
+
+// The post-quantum key types (raw-seed, raw-public, encapsulate/decapsulate) are newer than the typings.
+const nodeCrypto: any = crypto;
 
 /**
  * The native host as a place to run web servers and clients, checked against Node.js itself: each fixture prints a
@@ -84,7 +87,12 @@ const DIFFERENTIAL: Array<[string, string[]]> = [
 ];
 
 // The Intl corpora print dates in the machine's zone and use its default locale: pin both, for Node.js and the host alike.
-const PINNED_ENV = { ...process.env, TZ: "America/New_York", LANG: "en_US.UTF-8", LC_ALL: "en_US.UTF-8" };
+const PINNED_ENV: NodeJS.ProcessEnv = {
+	...process.env,
+	TZ: "America/New_York",
+	LANG: "en_US.UTF-8",
+	LC_ALL: "en_US.UTF-8",
+};
 delete PINNED_ENV.NODE_TEST_CONTEXT;
 delete PINNED_ENV.NODE_TEST_WORKER_ID;
 

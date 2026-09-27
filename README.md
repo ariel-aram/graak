@@ -352,7 +352,7 @@ compiles it.
 
 A prebuilt host is trusted only while the sources it was built from are the sources on disk: its manifest carries a digest
 of `quickjs/native/`, computed with line endings ignored so a CRLF checkout still matches. A changed source falls back to
-compiling, and `test/prebuilt.test.ts` fails until the prebuilts are regenerated with `pnpm prebuilts`.
+compiling, and `test/prebuilt.test.ts` fails until the prebuilts are regenerated with `bun run prebuilts`.
 
 Other things that keep repeat builds fast: converted ES modules and TypeScript files are cached by content, work is
 limited to a bounded number of files at once, and patched Windows 7 addons are cached by digest.
@@ -647,7 +647,7 @@ const client = new ForgeClient({
 ```
 
 `$compileBinary` stays disabled unless `allowCompile: true`. The function reference lives in `metadata/functions.json`
-(regenerate with `pnpm docgen`).
+(regenerate with `bun run docgen`).
 
 | Group | Functions |
 | --- | --- |
@@ -678,14 +678,18 @@ const client = new ForgeClient({
 ## Development
 
 ```sh
-pnpm install
-pnpm typecheck && pnpm build && pnpm test && pnpm check
+bun install
+bun run typecheck && bun run typecheck:test && bun run build && bun run test && bun run check
 ```
 
-`pnpm test` compiles first and runs everything under `test/` with Node's test runner. Checks that need something extra
+The repository is installed and driven with Bun (`bun.lock`). Its scripts are plain `tsc` and `node` commands, so npm, pnpm, Yarn
+and Deno (`deno task`) run the same ones; only the lockfile is Bun's. `bun test` is Bun's own runner, not this suite: use
+`bun run test`.
+
+`bun run test` compiles first and runs everything under `test/` with Node's test runner. Checks that need something extra
 skip themselves when it is missing: a built host (`GRAAK_C`), `qjs` (`GRAAK_QJS`), the musl.cc toolchains on `PATH`, NAN
 sources (`GRAAK_NAN_DIR`), `deno` (the Deno corpora and project compare against real Deno; the project needs the jsr and npm packages reachable or cached) and the `fg-wine` Docker image, which runs the Windows host (build it with `docker build -t fg-wine -f test/docker/fg-wine.Dockerfile test/docker`). `dist/` is committed, so run
-`pnpm build` before committing.
+`bun run build` before committing.
 
 Layout: `src/compiler` (collect, convert, package), `src/structures` (targets, errors), `src/runtime` (launchers and
 polyfills for Node.js builds), `src/integrations` (database driver knowledge), `src/forgescript` (the optional
@@ -696,7 +700,7 @@ After **any** change under `quickjs/native/` or `quickjs/winxp-compat.patch`, re
 minutes, with the cross toolchains on `PATH`) and commit them:
 
 ```sh
-pnpm prebuilts
+bun run prebuilts
 ```
 
 <h3 align="center">Credits</h3><hr>

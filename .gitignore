@@ -4,8 +4,7 @@ node_modules
 # Build outputs
 tmp
 
-# Lock files (optional - keep if you want deterministic installs)
-# pnpm-lock.yaml
+# Lock files are committed (bun.lock)
 
 # IDE / Editor files
 .vscode

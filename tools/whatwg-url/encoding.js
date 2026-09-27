@@ -1,4 +1,3 @@
-"use strict";
 // whatwg-url's encoding helpers without a dependency on TextEncoder/TextDecoder, which the runtime installs after this
 // module has been evaluated: plain UTF-8 in both directions, lone surrogates and bad bytes becoming U+FFFD.
 function utf8Encode(string) {

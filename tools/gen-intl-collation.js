@@ -85,7 +85,10 @@ function collationData(locales) {
 			expandable.add(c);
 		}
 	}
-	const primaryGroups = groupsOf(sorted.filter((c) => !expandable.has(c)), primary);
+	const primaryGroups = groupsOf(
+		sorted.filter((c) => !expandable.has(c)),
+		primary
+	);
 
 	const inOrder = (group, collator) => group.slice().sort((x, y) => collator.compare(x, y) || (x < y ? -1 : 1));
 	let orderString = "";
@@ -103,40 +106,70 @@ function collationData(locales) {
 	});
 
 	// Combining marks in order of their secondary weight.
-	const markOrder = groupsOf(marks.slice().sort((x, y) => accent.compare(`a${x}`, `a${y}`) || (x < y ? -1 : 1)), { compare: (x, y) => accent.compare(`a${x}`, `a${y}`) });
+	const markOrder = groupsOf(
+		marks.slice().sort((x, y) => accent.compare(`a${x}`, `a${y}`) || (x < y ? -1 : 1)),
+		{ compare: (x, y) => accent.compare(`a${x}`, `a${y}`) }
+	);
 	const marksString = markOrder.map((g) => g.join("")).join(SECONDARY);
 
 	const markSet = new Set(marks);
-	const variable = all.filter((c) => variant.compare("a", `a${c}`) !== 0 && shifted.compare("a", `a${c}`) === 0 && !markSet.has(c)).join("");
+	const variable = all
+		.filter((c) => variant.compare("a", `a${c}`) !== 0 && shifted.compare("a", `a${c}`) === 0 && !markSet.has(c))
+		.join("");
 
 	// Digits: the code point of each block's zero.
 	const digitZeros = [];
 	for (const c of all) {
 		const cp = c.codePointAt(0);
-		if (/\p{Nd}/u.test(c) && !digitZeros.includes(cp - 1) && !(cp > 0 && /\p{Nd}/u.test(String.fromCodePoint(cp - 1)))) digitZeros.push(cp);
+		if (/\p{Nd}/u.test(c) && !digitZeros.includes(cp - 1) && !(cp > 0 && /\p{Nd}/u.test(String.fromCodePoint(cp - 1))))
+			digitZeros.push(cp);
 	}
 
 	// Tailoring: a letter is tailored when its position among the ASCII letters differs from the root's.
 	// Scripts a locale sorts before Latin (Cyrillic in Russian, Han in Chinese, Hangul and Han in Korean).
-	const REORDERABLE = [["Cyrillic", "\u0430"], ["Greek", "\u03b1"], ["Hangul", "\uac00"], ["Han", "\u4e2d"], ["Hiragana", "\u3042"], ["Katakana", "\u30a2"], ["Arabic", "\u0627"], ["Hebrew", "\u05d0"], ["Thai", "\u0e01"], ["Devanagari", "\u0915"]];
+	const REORDERABLE = [
+		["Cyrillic", "\u0430"],
+		["Greek", "\u03b1"],
+		["Hangul", "\uac00"],
+		["Han", "\u4e2d"],
+		["Hiragana", "\u3042"],
+		["Katakana", "\u30a2"],
+		["Arabic", "\u0627"],
+		["Hebrew", "\u05d0"],
+		["Thai", "\u0e01"],
+		["Devanagari", "\u0915"],
+	];
 	const atomicSet = new Set(atomic);
 	const asciiLetters = [..."abcdefghijklmnopqrstuvwxyz"];
-	const nfcLetters = all.filter((c) => /\p{L}/u.test(c) && c.codePointAt(0) > 0x7f && c.codePointAt(0) <= 0x1eff && (c.normalize("NFD") !== c || atomicSet.has(c)));
+	const nfcLetters = all.filter(
+		(c) =>
+			/\p{L}/u.test(c) &&
+			c.codePointAt(0) > 0x7f &&
+			c.codePointAt(0) <= 0x1eff &&
+			(c.normalize("NFD") !== c || atomicSet.has(c))
+	);
 	const uppercase = (c) => c !== c.toLowerCase();
 	const tailoring = {};
 	const reorder = {};
 	for (const locale of locales) {
 		const collator = new Intl.Collator(locale, { sensitivity: "base" });
-		const moved = REORDERABLE.filter(([, rep]) => collator.compare(rep, "a") < 0).sort((x, y) => collator.compare(x[1], y[1]));
+		const moved = REORDERABLE.filter(([, rep]) => collator.compare(rep, "a") < 0).sort((x, y) =>
+			collator.compare(x[1], y[1])
+		);
 		if (moved.length) reorder[locale] = moved.map(([name]) => name);
 		const movedPattern = moved.length ? new RegExp(moved.map(([name]) => `\\p{Script=${name}}`).join("|"), "u") : null;
 		const accentL = new Intl.Collator(locale, { sensitivity: "accent" });
 		const variantL = new Intl.Collator(locale, { sensitivity: "variant" });
 		const signature = (c, collate) => asciiLetters.map((x) => Math.sign(collate.compare(c, x))).join("");
-		const tailoredAscii = [..."ABCDEFGHIJKLMNOPQRSTUVWXYZ"].filter((c) => signature(c, collator) !== signature(c, primary));
-		let changed = [...tailoredAscii, ...nfcLetters].filter((c) => !(movedPattern && movedPattern.test(c)) && signature(c, collator) !== signature(c, primary));
+		const tailoredAscii = [..."ABCDEFGHIJKLMNOPQRSTUVWXYZ"].filter(
+			(c) => signature(c, collator) !== signature(c, primary)
+		);
+		let changed = [...tailoredAscii, ...nfcLetters].filter(
+			(c) => !movedPattern?.test(c) && signature(c, collator) !== signature(c, primary)
+		);
 		// A letter built on a tailored one (Turkish "İ" is "I" and a dot) has to follow it.
-		if (tailoredAscii.length) changed = [...new Set([...changed, ...nfcLetters.filter((c) => tailoredAscii.includes(c.normalize("NFD")[0]))])];
+		if (tailoredAscii.length)
+			changed = [...new Set([...changed, ...nfcLetters.filter((c) => tailoredAscii.includes(c.normalize("NFD")[0]))])];
 		if (!changed.length) {
 			continue;
 		}
@@ -155,15 +188,28 @@ function collationData(locales) {
 		}
 		for (const [key, list] of byAnchor) {
 			const anchor = key.slice(1);
-			const groups = groupsOf(list.map((r) => r.c).sort((x, y) => collator.compare(x, y) || accentL.compare(x, y) || variantL.compare(x, y) || (x < y ? -1 : 1)), collator);
+			const groups = groupsOf(
+				list
+					.map((r) => r.c)
+					.sort(
+						(x, y) => collator.compare(x, y) || accentL.compare(x, y) || variantL.compare(x, y) || (x < y ? -1 : 1)
+					),
+				collator
+			);
 			groups.forEach((group, gi) => {
 				const members = key[0] === "=" ? [anchor, anchor.toUpperCase(), ...group] : group;
-				const sortedMembers = members.slice().sort((x, y) => accentL.compare(x, y) || variantL.compare(x, y) || (x < y ? -1 : 1));
+				const sortedMembers = members
+					.slice()
+					.sort((x, y) => accentL.compare(x, y) || variantL.compare(x, y) || (x < y ? -1 : 1));
 				const bySecondary = groupsOf(sortedMembers, accentL);
 				for (const c of group) {
 					const s = bySecondary.findIndex((g) => g.includes(c));
-					const t = groupsOf(bySecondary[s].slice().sort((x, y) => variantL.compare(x, y) || (x < y ? -1 : 1)), variantL).findIndex((g) => g.includes(c));
-					entries[c.normalize("NFD")] = key[0] === "=" ? { same: anchor, s, t } : { after: anchor, n: gi + 1, of: groups.length, s, t };
+					const t = groupsOf(
+						bySecondary[s].slice().sort((x, y) => variantL.compare(x, y) || (x < y ? -1 : 1)),
+						variantL
+					).findIndex((g) => g.includes(c));
+					entries[c.normalize("NFD")] =
+						key[0] === "=" ? { same: anchor, s, t } : { after: anchor, n: gi + 1, of: groups.length, s, t };
 				}
 			});
 		}
@@ -179,10 +225,24 @@ function collationData(locales) {
 		const collator = new Intl.Collator(locale, { sensitivity: "variant" });
 		const primaryOnly = new Intl.Collator(locale, { sensitivity: "base" });
 		const list = hanChars.slice().sort((x, y) => collator.compare(x, y) || (x < y ? -1 : 1));
-		han[locale] = groupsOf(list, primaryOnly).map((g) => g.join("")).join(PRIMARY);
+		han[locale] = groupsOf(list, primaryOnly)
+			.map((g) => g.join(""))
+			.join(PRIMARY);
 	}
 
-	return { order: orderString, marks: marksString, expansions, compat, reorder, ignorable: ignorable.join(""), variable, digitZeros, tailoring, han, separators: [PRIMARY, SECONDARY, TERTIARY] };
+	return {
+		order: orderString,
+		marks: marksString,
+		expansions,
+		compat,
+		reorder,
+		ignorable: ignorable.join(""),
+		variable,
+		digitZeros,
+		tailoring,
+		han,
+		separators: [PRIMARY, SECONDARY, TERTIARY],
+	};
 }
 
 module.exports = { collationData };

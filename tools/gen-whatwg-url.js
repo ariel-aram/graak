@@ -20,7 +20,9 @@ const swap = {
 	name: "graak-shims",
 	setup(b) {
 		b.onResolve({ filter: /^tr46$/ }, () => ({ path: join(__dirname, "whatwg-url/tr46-shim.js") }));
-		b.onResolve({ filter: /^\.\/encoding$/ }, (args) => (args.importer.includes("whatwg-url") ? { path: join(__dirname, "whatwg-url/encoding.js") } : undefined));
+		b.onResolve({ filter: /^\.\/encoding$/ }, (args) =>
+			args.importer.includes("whatwg-url") ? { path: join(__dirname, "whatwg-url/encoding.js") } : undefined
+		);
 	},
 };
 
@@ -44,7 +46,10 @@ async function main() {
 		minify: false,
 		keepNames: true,
 	});
-	writeFileSync(join(out, "whatwg-url.js"), header("URL and URLSearchParams", "the WHATWG URL Standard (whatwg-url), bundled") + main.outputFiles[0].text);
+	writeFileSync(
+		join(out, "whatwg-url.js"),
+		header("URL and URLSearchParams", "the WHATWG URL Standard (whatwg-url), bundled") + main.outputFiles[0].text
+	);
 
 	const idna = await build({
 		stdin: { contents: 'globalThis.__graak_tr46 = require("tr46");', resolveDir: root, sourcefile: "entry.js" },
@@ -57,7 +62,11 @@ async function main() {
 		legalComments: "none",
 		minify: true,
 	});
-	writeFileSync(join(out, "idna-data.js"), header("IDNA", "the UTS #46 processing and mapping tables (tr46), a script loaded on demand") + idna.outputFiles[0].text);
+	writeFileSync(
+		join(out, "idna-data.js"),
+		header("IDNA", "the UTS #46 processing and mapping tables (tr46), a script loaded on demand") +
+			idna.outputFiles[0].text
+	);
 	console.log("wrote whatwg-url.js and idna-data.js");
 }
 

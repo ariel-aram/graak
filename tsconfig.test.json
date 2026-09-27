@@ -1,0 +1,22 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": ".",
+    "allowImportingTsExtensions": true,
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false,
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "target": "ES2023"
+  },
+  "include": [
+    "test/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "test/fixtures"
+  ]
+}

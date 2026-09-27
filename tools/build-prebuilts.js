@@ -50,7 +50,10 @@ writeFileSync(manifestPath, `${JSON.stringify({ sourceHash, hosts }, null, "\t")
 
 if (!wanted.length) {
 	const shimHash = Win7Compat.shimSourceHash(root);
-	for (const [arch, folder] of [["x64", "x64"], ["x86", "x86"]]) {
+	for (const [arch, folder] of [
+		["x64", "x64"],
+		["x86", "x86"],
+	]) {
 		const dir = join(out, "win-compat", folder);
 		mkdirSync(dir, { recursive: true });
 		const res = spawnSync("sh", [join(root, "quickjs/native/win-compat/build.sh"), arch, dir], { stdio: "inherit" });

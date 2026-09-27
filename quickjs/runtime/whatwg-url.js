@@ -572,7 +572,6 @@ var require_utils = __commonJS({
 // tools/whatwg-url/tr46-shim.js
 var require_tr46_shim = __commonJS({
   "tools/whatwg-url/tr46-shim.js"(exports, module) {
-    "use strict";
     function real() {
       if (!globalThis.__graak_tr46) globalThis.__graak_loadData("idna-data.js");
       return globalThis.__graak_tr46;
@@ -627,7 +626,6 @@ var require_infra = __commonJS({
 // tools/whatwg-url/encoding.js
 var require_encoding = __commonJS({
   "tools/whatwg-url/encoding.js"(exports, module) {
-    "use strict";
     function utf8Encode(string) {
       const out = [];
       for (let i = 0; i < string.length; i++) {

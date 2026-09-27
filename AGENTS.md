@@ -35,25 +35,30 @@ OpenCode reads this file directly.
 ## Commands
 
 ```sh
-pnpm install
-pnpm typecheck && pnpm build && pnpm check     # tsc --noEmit, tsc (writes dist/), biome
-pnpm test                                      # tsc, then every test/**/*.test.ts
+bun install
+bun run typecheck && bun run build && bun run check     # tsc --noEmit, tsc (writes dist/), biome
+bun run test                                      # tsc, then every test/**/*.test.ts
 node --test test/webRuntime.test.ts            # one suite while iterating
-pnpm prebuilts                                 # rebuild the shipped hosts (about seven minutes, cross toolchains on PATH)
-pnpm exec biome check --write src test         # format and fix
+bun run prebuilts                                 # rebuild the shipped hosts (about seven minutes, cross toolchains on PATH)
+bunx biome check --write                  # format and fix (src, test, tools, the JSON configs)
+bun run typecheck:test                    # tsc over test/*.ts
 ```
 
-Biome uses tabs, line width 120. `dist/` is committed: run `pnpm build` before committing.
+The repository is installed and driven with Bun (`bun.lock`). The scripts are plain `tsc` and `node` commands, so `npm run`,
+`pnpm run`, `yarn` and `deno task` run the same ones from a `package.json` install of any of them; only the lockfile is
+Bun's. `bun test` is Bun's own runner, not this suite: use `bun run test`.
+
+Biome uses tabs, line width 120. `dist/` is committed: run `bun run build` before committing.
 
 ## Definition of done
 
 Run the whole chain; a red check means fix and re-run all of it. Never call something done with a failing or skipped-when-it-should-run check.
 
-1. `pnpm exec biome check --write src test`, `pnpm typecheck`, `pnpm build`.
-2. The suite that covers the change while iterating, then the **full** `pnpm test` before reporting.
+1. `bunx biome check --write`, `bun run typecheck`, `bun run typecheck:test`, `bun run build`.
+2. The suite that covers the change while iterating, then the **full** `bun run test` before reporting.
 3. **Runtime changes** (`quickjs/runtime`): the matching differential corpus in `test/fixtures/web` must print exactly what Node.js
    prints. New behaviour gets a corpus line, and the corpus is added to `DIFFERENTIAL` in `test/webRuntime.test.ts`.
-4. **C changes** (`quickjs/native`, `winxp-compat.patch`): `pnpm prebuilts`, commit the regenerated hosts, then run the Wine tests.
+4. **C changes** (`quickjs/native`, `winxp-compat.patch`): `bun run prebuilts`, commit the regenerated hosts, then run the Wine tests.
    Batch all C changes for a work session into ONE prebuilt rebuild.
 5. **Windows-facing changes**: the Wine and Docker tests (`fg-wine` image: the Windows hosts and single-file builds) are part
    of the bar and must actually run, not skip. Check an executable's imports (`objdump -p`) before claiming an old-Windows fix.
@@ -101,7 +106,7 @@ Independent gaps can be worked at the same time by separate agents, each in its 
 - Two agents never edit the same file set. `quickjs/native/*`, `quickjs/prebuilt/*`, the generated `intl-*.js` files and
   `dist/` are single-writer: one agent owns them at a time, and the C work of all agents is merged before the one prebuilt rebuild.
 - Each agent finishes its own definition of done (above) before handing back, and reports what it ran and what it saw.
-- The integrating agent runs the full `pnpm test`, including the Wine and Docker tests, on the merged result.
+- The integrating agent runs the full `bun run test`, including the Wine and Docker tests, on the merged result.
 
 ## Traps already paid for
 

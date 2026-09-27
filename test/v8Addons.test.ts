@@ -243,7 +243,7 @@ test("a V8 addon that ships only its binary is rebuilt from the source in its re
 			(err: Error) => err.message
 		);
 		assert.match(offline, /ships only a prebuilt addon compiled against V8/, "offline, nothing may be fetched");
-		assert.deepEqual(requested, []);
+		assert.equal(requested.length, 0);
 
 		const result = await BinaryPackager.compile({
 			entrypoint: join(root, "index.js"),

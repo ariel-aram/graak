@@ -1,4 +1,3 @@
-"use strict";
 // tr46 (IDNA / UTS #46) on demand: its mapping tables are 200 KB, and most host names are plain ASCII, so the real module
 // is a separate script (idna-data.js) that is evaluated the first time a name needs it.
 function real() {

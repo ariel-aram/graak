@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+// @ts-expect-error the runtime files are plain JavaScript without declarations
 import { parseIpconfig, parseNslookup, parseResolvConf } from "../quickjs/runtime/node-dns.js";
 
 test("parseIpconfig handles Windows XP and 7 English outputs", () => {

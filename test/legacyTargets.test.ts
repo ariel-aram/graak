@@ -61,6 +61,7 @@ test("Windows XP counts as legacy Windows even though its id has no 'legacy' in 
 		simdUnsafe: meta.is32BitOrLegacy,
 		nativeShim: meta.is32BitOrLegacy,
 		bunCompat: false,
+		legacyPolyfills: null,
 	});
 	assert.match(boot, /"windowsLegacy":true/);
 	assert.match(boot, /use-system-ca/, "the outdated-certificate-store warning must apply to XP too");
@@ -90,6 +91,7 @@ test("launcher flags are derived from metadata for every target", () => {
 			simdUnsafe: meta.is32BitOrLegacy,
 			nativeShim: meta.is32BitOrLegacy,
 			bunCompat: false,
+			legacyPolyfills: null,
 		});
 		assert.equal(
 			/installGraakNativeShim/.test(source),
@@ -113,6 +115,7 @@ test("the Bun compatibility layer is independent of the target's legacy status",
 			simdUnsafe: meta.is32BitOrLegacy,
 			nativeShim: meta.is32BitOrLegacy,
 			bunCompat: true,
+			legacyPolyfills: null,
 		});
 		assert.match(source, /installGraakBunCompat/, `${target}: bunCompat must install regardless of legacy status`);
 	}

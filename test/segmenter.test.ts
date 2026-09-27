@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+// @ts-expect-error the runtime files are plain JavaScript without declarations
 import { graphemeBreaks, Segmenter, wordBreaks } from "../quickjs/runtime/segmenter.js";
 
 /**

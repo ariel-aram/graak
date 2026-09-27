@@ -1,5 +1,0 @@
-# esbuild's postinstall only relinks its platform binary, which the @esbuild/<platform>
-# package already provides directly. Verified working with the script skipped, so it stays
-# off rather than left as an unanswered prompt.
-allowBuilds:
-  esbuild: false

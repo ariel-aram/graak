@@ -92,8 +92,8 @@ test("Graak builds what deno compile cannot: the five targets Deno makes itself,
 		TargetDevice.WinLegacyX86,
 		TargetDevice.IosIshX86,
 		TargetDevice.LinuxX86,
-		TargetDevice.LinuxArmv7,
-		TargetDevice.FreebsdX86,
+		TargetDevice.LinuxArmV7,
+		TargetDevice.FreeBsdX86,
 	]) {
 		assert.equal(DenoProject.canDenoCompile(target), false, `${target} is Graak's`);
 	}

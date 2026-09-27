@@ -36,9 +36,10 @@
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
-    "check": "biome check src test",
-    "format": "biome format --write src test",
+    "check": "biome check",
+    "format": "biome format --write",
     "docgen": "tsc && node dist/forgescript/docgen.js",
+    "typecheck:test": "tsc -p tsconfig.test.json",
     "test": "tsc && node --test \"test/**/*.test.ts\"",
     "conformance": "node tools/engine-conformance.js",
     "prebuilts": "tsc && node tools/build-prebuilts.js"
@@ -62,16 +63,9 @@
   "author": "Ariel Aram",
   "license": "GPL-3.0-or-later",
   "engines": {
-    "node": ">=20.12.0"
+    "node": ">=20.12.0",
+    "bun": ">=1.2.0"
   },
-  "devEngines": {
-    "packageManager": {
-      "name": "pnpm",
-      "version": "12.4.2",
-      "onFail": "download"
-    }
-  },
-  "packageManager": "pnpm@12.4.2",
   "dependencies": {
     "abort-controller": "^3.0.0",
     "esbuild": "^0.28.2",
@@ -90,7 +84,7 @@
     }
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.5.13",
+    "@biomejs/biome": "^2.5.14",
     "@tryforge/forgescript": "^2.7.1",
     "@types/node": "^22.13.9",
     "nan": "^2.29.0",

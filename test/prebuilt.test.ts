@@ -62,9 +62,9 @@ test("a program that cannot be started reports why instead of throwing", () => {
 test("converted ES modules are cached and a second build reuses them", async () => {
 	const cacheDir = mkdtempSync(join(tmpdir(), "graak-esm-cache-"));
 	const entries = [
-		{ path: "index.mjs", source: Buffer.from("import { a } from './a.mjs';\nconsole.log(a);\n") },
-		{ path: "a.mjs", source: Buffer.from("export const a = 1;\n") },
-		{ path: "plain.js", source: Buffer.from("module.exports = 1;\n") },
+		{ path: "index.mjs", source: Buffer.from("import { a } from './a.mjs';\nconsole.log(a);\n"), mode: 0o644 },
+		{ path: "a.mjs", source: Buffer.from("export const a = 1;\n"), mode: 0o644 },
+		{ path: "plain.js", source: Buffer.from("module.exports = 1;\n"), mode: 0o644 },
 	];
 	const first: string[] = [];
 	const one = await LegacyTranspiler.toCommonJs(entries, { cacheDir, onLog: (m) => first.push(m) });
