@@ -209,7 +209,11 @@ first use, and a build ships it only when the program or a package it bundles me
 `localeCompare` (`--intl all` or `--intl none` overrides; about 7 MB, 1.5 MB compressed), so a program that never touches
 `Intl` pays nothing for it. Not covered: calendars other than Gregorian, numbering systems other than Latin, ICU's interval
 patterns (`formatRange` joins two full dates with the locale's range separator instead of merging the shared fields), unit
-compositions beyond `X-per-Y`, and ICU's generic zone names in a few zones (Egypt's disambiguating "(Egypt)").
+compositions beyond `X-per-Y`, and ICU's generic zone names in a few zones (Egypt's disambiguating "(Egypt)"). The generator's
+ICU is Node 26's (Current), which is newer than Node 24.21.0's (LTS): `Intl.PluralRules.resolvedOptions()`'s `notation`
+field, `Intl.Collator`'s default collation for `zh` (`"pinyin"`), the wording of a malformed-tag `RangeError`, and
+`crypto.getCipherInfo()`'s key order all moved between the two, and the host follows 26 throughout — verify any of these
+against both baselines before assuming a 24-only mismatch is a bug here.
 
 Verified against real packages, with no Node.js anywhere in the output: **Express 4**, **Fastify** and **Hono**, each
 served from a packaged `linux-modern-x64` build; **`ws`** as a WebSocket server and client exchanging text and 70 KB
