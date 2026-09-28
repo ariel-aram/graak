@@ -108,12 +108,12 @@ function installIntl({ global, loadScript, envLocale, envTimeZone }) {
 		if (t.privateUse) parts.push("x", t.privateUse);
 		return parts.join("-");
 	}
-	function canonicalizeTag(input) {
+	function canonicalizeTag(input, forConstructor = true) {
 		if (typeof input !== "string" && !(input && typeof input === "object")) throw new TypeError("Incorrect locale information provided");
 		if (input instanceof IntlObject.Locale) return input.toString();
 		const text = String(input);
 		const t = parseTag(text);
-		if (!t) throw new RangeError("Incorrect locale information provided");
+		if (!t) throw new RangeError(forConstructor ? "Incorrect locale information provided" : `Invalid language tag: ${text}`);
 		const alias = LANGUAGE_ALIASES[t.language];
 		if (alias) {
 			const [language, script] = alias.split("-");
@@ -123,13 +123,13 @@ function installIntl({ global, loadScript, envLocale, envTimeZone }) {
 		if (t.region && REGION_ALIASES[t.region.toUpperCase()]) t.region = REGION_ALIASES[t.region.toUpperCase()];
 		return serializeTag(t);
 	}
-	function canonicalList(locales) {
+	function canonicalList(locales, forConstructor = true) {
 		if (locales === undefined) return [];
 		if (locales === null) throw new TypeError("Cannot convert undefined or null to object");
-		if (typeof locales === "string" || locales instanceof IntlObject.Locale) return [canonicalizeTag(locales)];
+		if (typeof locales === "string" || locales instanceof IntlObject.Locale) return [canonicalizeTag(locales, forConstructor)];
 		const list = [];
 		for (const item of Array.from(Object(locales))) {
-			const tag = canonicalizeTag(item);
+			const tag = canonicalizeTag(item, forConstructor);
 			if (!list.includes(tag)) list.push(tag);
 		}
 		return list;
@@ -1055,7 +1055,7 @@ function installIntl({ global, loadScript, envLocale, envTimeZone }) {
 		}
 		resolvedOptions() {
 			const r = this.#nf.resolvedOptions();
-			const out = { locale: this.#locale.locale, type: this.#type, minimumIntegerDigits: r.minimumIntegerDigits };
+			const out = { locale: this.#locale.locale, type: this.#type, notation: "standard", minimumIntegerDigits: r.minimumIntegerDigits };
 			if (r.minimumFractionDigits !== undefined) Object.assign(out, { minimumFractionDigits: r.minimumFractionDigits, maximumFractionDigits: r.maximumFractionDigits });
 			if (r.minimumSignificantDigits !== undefined) Object.assign(out, { minimumSignificantDigits: r.minimumSignificantDigits, maximumSignificantDigits: r.maximumSignificantDigits });
 			out.pluralCategories = [...L(this.#locale.dataTag).plural[this.#type]].sort((a, b) => CATEGORY_ORDER.indexOf(a) - CATEGORY_ORDER.indexOf(b));
@@ -1262,7 +1262,7 @@ function installIntl({ global, loadScript, envLocale, envTimeZone }) {
 			const keys = this.#locale.keys;
 			const numeric = options.numeric === undefined ? keys.kn === "true" : Boolean(options.numeric);
 			const caseFirst = getOption(options, "caseFirst", "string", ["upper", "lower", "false"], keys.kf ?? "false", COLLATOR);
-			this.#o = { usage, sensitivity: getOption(options, "sensitivity", "string", ["base", "accent", "case", "variant"], "variant", COLLATOR), ignorePunctuation: getOption(options, "ignorePunctuation", "boolean", undefined, false, COLLATOR), numeric, caseFirst, collation: keys.co ?? "default" };
+			this.#o = { usage, sensitivity: getOption(options, "sensitivity", "string", ["base", "accent", "case", "variant"], "variant", COLLATOR), ignorePunctuation: getOption(options, "ignorePunctuation", "boolean", undefined, false, COLLATOR), numeric, caseFirst, collation: keys.co ?? (this.#locale.language === "zh" ? "pinyin" : "default") };
 			this.#tailoring = L(this.#locale.dataTag).tailoring;
 			this.#reorder = L(this.#locale.dataTag).reorder ?? [];
 			Object.defineProperty(this, "compare", { value: (a, b) => this.#compare(String(a), String(b)), configurable: true, writable: true });
@@ -1486,7 +1486,7 @@ function installIntl({ global, loadScript, envLocale, envTimeZone }) {
 		#t;
 		constructor(tag, options) {
 			if (typeof tag !== "string" && !(tag && typeof tag === "object")) throw new TypeError("First argument to Intl.Locale constructor can't be empty or missing");
-			const t = parseTag(canonicalizeTag(tag instanceof Locale ? tag.toString() : String(tag)));
+			const t = parseTag(canonicalizeTag(tag instanceof Locale ? tag.toString() : String(tag), true));
 			options = options === undefined ? Object.create(null) : coerceOptions(options);
 			if (options.language !== undefined) {
 				if (!/^(?:[A-Za-z]{2,3}|[A-Za-z]{5,8})$/.test(String(options.language))) throw new RangeError("Incorrect locale information provided");
@@ -1687,7 +1687,7 @@ function installIntl({ global, loadScript, envLocale, envTimeZone }) {
 		if (typeof IntlObject[name] !== "function") defineHidden(IntlObject, name, callable(Class, name, legacy));
 	}
 	if (!IntlObject.getCanonicalLocales) {
-		defineHidden(IntlObject, "getCanonicalLocales", (locales) => canonicalList(locales));
+		defineHidden(IntlObject, "getCanonicalLocales", (locales) => canonicalList(locales, false));
 		defineHidden(IntlObject, "supportedValuesOf", (key) => {
 			const data = D();
 			switch (String(key)) {
@@ -1740,7 +1740,7 @@ function installIntl({ global, loadScript, envLocale, envTimeZone }) {
 	const caseMap = (upper) =>
 		function (locales) {
 			if (this === null || this === undefined) throw new TypeError(`String.prototype.toLocale${upper ? "Upper" : "Lower"}Case called on null or undefined`);
-			const language = parseTag(locales === undefined ? envLocale() : (canonicalList(locales)[0] ?? envLocale()))?.language ?? "en";
+			const language = parseTag(locales === undefined ? envLocale() : (canonicalList(locales, false)[0] ?? envLocale()))?.language ?? "en";
 			let s = String(this);
 			if (language === "tr" || language === "az") s = upper ? s.replace(/i/g, "İ").replace(/ı/g, "I") : s.replace(/İ/g, "i").replace(/I/g, "ı");
 			else if (language === "lt" && !upper) s = s.replace(/İ/g, "i̇");
