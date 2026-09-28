@@ -128,25 +128,14 @@ classic DSA (both reject it) and ECDSA (Node signs and verifies with it like any
 digest is computed in JavaScript and handed to mbedTLS as already-hashed bytes, since mbedTLS's own digest table has no
 BLAKE2 entry to compute it from the name).
 
-**Pending prebuilt rebuild, not a code gap:** the ECDSA BLAKE2 fix and `backup()` above changed `quickjs/native`, and
-every target except `linux-x86` and `linux-x86-musl-dyn` (32-bit Linux and iSH) has been rebuilt to match; those two
-still carry the pre-change binaries because building them needs an `i686-linux-musl-cross` toolchain from musl.cc,
-and musl.cc itself is denied by the same egress policy that blocks `www.sqlite.org` above (confirmed again on
-2026-09-29: `CONNECT tunnel failed, response 403`). The two targets still run, just without the ECDSA BLAKE2 and
-`backup()` changes until `bun run prebuilts linux-x86 linux-x86-musl-dyn` runs on a machine that can reach musl.cc
-or already has the toolchain on `PATH` -- it will merge cleanly since the source hash already matches. Until then,
-`every native host has a prebuilt copy built from the sources on disk` and the two tests that build and run those
-targets for real fail in any environment without that toolchain, which is expected, not a regression.
-
-What is genuinely still absent, not just narrowed: `node:sqlite` user-defined functions and extensions (`backup()` is
-implemented: rate-limited `sqlite3_backup_step` stepping driven from JavaScript, with `progress`, `source`/`target` and
-Node's own validation and error shapes, so no C-callback-into-JS bridging was needed; `function()`, the scalar
-`sqlite3_create_function_v2` binding, is implemented and differentially verified on the `sqlite-function-pending-prebuilt`
-branch, not yet merged: `apt-get install mingw-w64 musl-tools` gets the Windows and `linux-x64*` cross toolchains this
-environment needs (`musl-tools` only covers the x64 target, not `linux-x86*`), but `www.sqlite.org` itself is denied by
-egress policy, and `quickjs/native/build.sh` fetches the SQLite amalgamation from there with no fallback -- no native
-host here can rebuild from source once `fg_sqlite.c` changes, prebuilt or not, until that fetch succeeds. Do not route
-around it with an unofficial mirror of the amalgamation; merge this branch on a machine that can reach sqlite.org);
+What is genuinely still absent, not just narrowed: `node:sqlite` extension loading (`enableLoadExtension`/`loadExtension` —
+`backup()` and `function()` are both implemented: `backup()` is rate-limited `sqlite3_backup_step` stepping driven from
+JavaScript, with `progress`, `source`/`target` and Node's own validation and error shapes; `function()` binds a scalar SQL
+function through `sqlite3_create_function_v2()`, with a C trampoline the same shape as `fg_ffi.c`'s libffi callback —
+`sqlite3_value*` args converted to JSValues, `JS_Call`, the JSValue result converted back with `sqlite3_result_*` — and
+Node's own argument coercion, `deterministic`/`directOnly`/`varargs`/`useBigIntArguments` options and error propagation.
+Loading extensions needs neither: the bundled amalgamation is compiled with `SQLITE_OMIT_LOAD_EXTENSION`, and a static
+host has no `dlopen` to load one with regardless — the same limit as native addon loading below);
 `node:test`'s `mock.module` for ESM (`import`/`import()` go through the engine's native module loader, which no
 JS-only hook can intercept — CommonJS `require()` mocking is implemented, gated behind
 `--experimental-test-module-mocks` exactly as Node gates it, for CommonJS as well as ESM); the inspector's `Profiler`,

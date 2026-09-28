@@ -33,9 +33,19 @@ static int fg_stmt_db[FG_MAX_STMTS];
 static sqlite3_backup *fg_backups[FG_MAX_BACKUPS];
 static sqlite3 *fg_backup_dest[FG_MAX_BACKUPS];
 
+static int fg_sqlite_pending_js_error;
+
 static JSValue fg_sqlite_throw(JSContext *ctx, sqlite3 *db, int code, const char *fallback)
 {
-    JSValue err = JS_NewError(ctx);
+    JSValue err;
+    if (fg_sqlite_pending_js_error) {
+        /* The SQLITE_ERROR this rc came from is a UDF callback's own JS exception, already pending on `ctx` (see
+           the user-defined-function section below): let it propagate as-is instead of masking it with a fresh
+           generic SQLite error, matching node:sqlite's ignore_next_sqlite_error_. */
+        fg_sqlite_pending_js_error = 0;
+        return JS_EXCEPTION;
+    }
+    err = JS_NewError(ctx);
     const char *message = db ? sqlite3_errmsg(db) : fallback;
     JS_SetPropertyStr(ctx, err, "message", JS_NewString(ctx, message ? message : "SQLite error"));
     JS_SetPropertyStr(ctx, err, "errcode", JS_NewInt32(ctx, db ? sqlite3_extended_errcode(db) : code));
@@ -458,6 +468,220 @@ static JSValue fg_sqlite_version(JSContext *ctx, JSValueConst this_val, int argc
     return JS_NewString(ctx, sqlite3_libversion());
 }
 
+/* ---------------------------------------------------------------- user-defined functions */
+
+/* node:sqlite's DatabaseSync.prototype.function() binds a scalar SQL function through
+   sqlite3_create_function_v2(). SQLite calls xFunc synchronously on this same thread (SQLITE_THREADSAFE=0), so it
+   is a plain reentrant C-calls-into-JS trampoline, the same shape as fg_ffi.c's libffi callback: convert
+   sqlite3_value* args to JSValues, JS_Call the registered function, convert the JSValue result back with
+   sqlite3_result_*.
+
+   `fn` lives for as long as SQLite keeps the registration: xDestroy (below) frees it, called by SQLite itself when
+   the function is overridden, when sqlite3_create_function_v2() fails to register it, or when the database closes
+   -- so closing a db (fg_sqlite_close's sqlite3_close) already cleans these up with no separate tracking table. */
+
+#define FG_MAX_UDF_ARGS 128
+
+typedef struct {
+    JSContext *ctx;
+    JSValue fn;
+    int use_bigint;
+} fg_udf;
+
+/* fg_sqlite_pending_js_error (declared above, next to fg_sqlite_throw) is set just before returning from a UDF
+   callback that leaves a real JS exception pending on `ctx` (an argument that overflowed, or the callback itself
+   throwing), and checked there so that exception propagates as-is instead of being masked by a fresh generic
+   SQLite error -- mirrors node:sqlite's DatabaseSync::ignore_next_sqlite_error_. Plain global, not per-db: SQLite
+   calls are synchronous and single threaded here, so at most one callback's error is ever pending at a time.
+
+   Converts one SQL function argument to JS, matching fg_sqlite_row's column conversion (same integer-safety and
+   bigint rules) but with node:sqlite's argument-overflow wording, which names no column. */
+static JSValue fg_sqlite_arg_to_js(JSContext *ctx, sqlite3_value *value, int use_bigint)
+{
+    switch (sqlite3_value_type(value)) {
+    case SQLITE_INTEGER: {
+        int64_t x = sqlite3_value_int64(value);
+        if (use_bigint) {
+            return JS_NewBigInt64(ctx, x);
+        }
+        if (x > 9007199254740991LL || x < -9007199254740991LL) {
+            JSValue error;
+            JS_ThrowRangeError(ctx, "Value is too large to be represented as a JavaScript number: %lld", (long long) x);
+            error = JS_GetException(ctx);
+            JS_SetPropertyStr(ctx, error, "code", JS_NewString(ctx, "ERR_OUT_OF_RANGE"));
+            return JS_Throw(ctx, error);
+        }
+        return JS_NewInt64(ctx, x);
+    }
+    case SQLITE_FLOAT:
+        return JS_NewFloat64(ctx, sqlite3_value_double(value));
+    case SQLITE_TEXT:
+        return JS_NewStringLen(ctx, (const char *) sqlite3_value_text(value), (size_t) sqlite3_value_bytes(value));
+    case SQLITE_BLOB: {
+        int size = sqlite3_value_bytes(value);
+        const void *data = sqlite3_value_blob(value);
+        JSValue buf = JS_NewArrayBufferCopy(ctx, data ? (const uint8_t *) data : (const uint8_t *) "", (size_t) size);
+        JSValue global = JS_GetGlobalObject(ctx);
+        JSValue ctor = JS_GetPropertyStr(ctx, global, "Uint8Array");
+        JSValue v = JS_CallConstructor(ctx, ctor, 1, (JSValueConst[]) {buf});
+        JS_FreeValue(ctx, ctor);
+        JS_FreeValue(ctx, global);
+        JS_FreeValue(ctx, buf);
+        return v;
+    }
+    default:
+        return JS_NULL;
+    }
+}
+
+/* Converts a UDF's JS return value to a SQLite result, matching node:sqlite's JSValueToSQLiteResult: null/undefined
+   is NULL, a number is always REAL (never INTEGER, even when integer-valued -- that is Node's own behaviour), a
+   BigInt that does not fit in a signed 64-bit integer is an error rather than silently truncated, an
+   ArrayBuffer-backed view is a BLOB, and anything else (boolean, plain object, array, symbol, ...) is rejected. */
+static void fg_sqlite_js_to_result(sqlite3_context *sctx, JSContext *ctx, JSValueConst value)
+{
+    if (JS_IsNull(value) || JS_IsUndefined(value)) {
+        sqlite3_result_null(sctx);
+        return;
+    }
+    if (JS_IsNumber(value)) {
+        double d;
+        JS_ToFloat64(ctx, &d, value);
+        sqlite3_result_double(sctx, d);
+        return;
+    }
+    if (JS_IsString(value)) {
+        size_t len;
+        const char *s = JS_ToCStringLen(ctx, &len, value);
+        if (!s) {
+            fg_sqlite_pending_js_error = 1;
+            sqlite3_result_error(sctx, "", 0);
+            return;
+        }
+        sqlite3_result_text64(sctx, s, (sqlite3_uint64) len, SQLITE_TRANSIENT, SQLITE_UTF8);
+        JS_FreeCString(ctx, s);
+        return;
+    }
+    if (JS_IsBigInt(value)) {
+        int64_t truncated;
+        JSValue reconstructed;
+        JS_ToBigInt64(ctx, &truncated, value); /* wraps mod 2^64; the roundtrip below is how losslessness is checked */
+        reconstructed = JS_NewBigInt64(ctx, truncated);
+        if (!JS_IsStrictEqual(ctx, value, reconstructed)) {
+            JS_FreeValue(ctx, reconstructed);
+            sqlite3_result_error(sctx, "BigInt value is too large for SQLite", -1);
+            return;
+        }
+        JS_FreeValue(ctx, reconstructed);
+        sqlite3_result_int64(sctx, truncated);
+        return;
+    }
+    if (JS_IsPromise(value)) {
+        sqlite3_result_error(sctx, "Asynchronous user-defined functions are not supported", -1);
+        return;
+    }
+    {
+        size_t size, offset, elem;
+        JSValue buffer = JS_GetTypedArrayBuffer(ctx, value, &offset, &size, &elem);
+        if (!JS_IsException(buffer)) {
+            size_t total;
+            uint8_t *data = JS_GetArrayBuffer(ctx, &total, buffer);
+            sqlite3_result_blob64(sctx, data ? data + offset : (const uint8_t *) "", (sqlite3_uint64) size, SQLITE_TRANSIENT);
+            JS_FreeValue(ctx, buffer);
+            return;
+        }
+        JS_FreeValue(ctx, JS_GetException(ctx)); /* "not a typed array": discard, fall through to the generic error */
+    }
+    sqlite3_result_error(sctx, "Returned JavaScript value cannot be converted to a SQLite value", -1);
+}
+
+static void fg_udf_xfunc(sqlite3_context *sctx, int argc, sqlite3_value **argv)
+{
+    fg_udf *udf = (fg_udf *) sqlite3_user_data(sctx);
+    JSContext *ctx = udf->ctx;
+    JSValue jsargv[FG_MAX_UDF_ARGS];
+    JSValue result;
+    int n = argc < FG_MAX_UDF_ARGS ? argc : FG_MAX_UDF_ARGS; /* SQLite's own function-arg limit stays well under this */
+
+    for (int i = 0; i < n; i++) {
+        jsargv[i] = fg_sqlite_arg_to_js(ctx, argv[i], udf->use_bigint);
+        if (JS_IsException(jsargv[i])) {
+            for (int j = 0; j < i; j++) {
+                JS_FreeValue(ctx, jsargv[j]);
+            }
+            fg_sqlite_pending_js_error = 1;
+            sqlite3_result_error(sctx, "", 0);
+            return;
+        }
+    }
+    result = JS_Call(ctx, udf->fn, JS_UNDEFINED, n, jsargv);
+    for (int i = 0; i < n; i++) {
+        JS_FreeValue(ctx, jsargv[i]);
+    }
+    if (JS_IsException(result)) {
+        fg_sqlite_pending_js_error = 1;
+        sqlite3_result_error(sctx, "", 0);
+        return;
+    }
+    fg_sqlite_js_to_result(sctx, ctx, result);
+    JS_FreeValue(ctx, result);
+}
+
+static void fg_udf_xdestroy(void *p)
+{
+    fg_udf *udf = (fg_udf *) p;
+    JS_FreeValue(udf->ctx, udf->fn);
+    free(udf);
+}
+
+/* sqliteCreateFunction(db, name, arity, deterministic, directOnly, useBigInt, fn): arity is -1 for a varargs
+   function (options.varargs) or the fixed argument count (fn.length) otherwise, as node:sqlite computes it. */
+static JSValue fg_sqlite_create_function(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    sqlite3 *db = fg_db_get(ctx, argv[0]);
+    const char *name;
+    int32_t arity, deterministic, direct_only, use_bigint;
+    int flags, rc;
+    fg_udf *udf;
+
+    if (!db) {
+        return JS_EXCEPTION;
+    }
+    name = JS_ToCString(ctx, argv[1]);
+    if (!name) {
+        return JS_EXCEPTION;
+    }
+    if (JS_ToInt32(ctx, &arity, argv[2]) || JS_ToInt32(ctx, &deterministic, argv[3]) ||
+        JS_ToInt32(ctx, &direct_only, argv[4]) || JS_ToInt32(ctx, &use_bigint, argv[5])) {
+        JS_FreeCString(ctx, name);
+        return JS_EXCEPTION;
+    }
+    udf = malloc(sizeof(*udf));
+    if (!udf) {
+        JS_FreeCString(ctx, name);
+        return JS_ThrowOutOfMemory(ctx);
+    }
+    udf->ctx = ctx;
+    udf->fn = JS_DupValue(ctx, argv[6]);
+    udf->use_bigint = use_bigint;
+
+    flags = SQLITE_UTF8;
+    if (deterministic) {
+        flags |= SQLITE_DETERMINISTIC;
+    }
+    if (direct_only) {
+        flags |= SQLITE_DIRECTONLY;
+    }
+
+    rc = sqlite3_create_function_v2(db, name, arity, flags, udf, fg_udf_xfunc, NULL, NULL, fg_udf_xdestroy);
+    JS_FreeCString(ctx, name);
+    if (rc != SQLITE_OK) {
+        /* sqlite3_create_function_v2() invokes xDestroy itself on failure, freeing `udf`: nothing to clean up here. */
+        return fg_sqlite_throw(ctx, db, rc, NULL);
+    }
+    return JS_UNDEFINED;
+}
+
 /* Closes and forgets backup slot `id`, the way node:sqlite's BackupJob::Cleanup() does: finish the backup, then
    close the destination connection it opened. Safe to call on an id that is already closed. */
 static void fg_backup_cleanup(int id)
@@ -605,5 +829,6 @@ const JSCFunctionListEntry graak_sqlite_funcs[] = {
     JS_CFUNC_DEF("sqliteBackupInit", 4, fg_sqlite_backup_init),
     JS_CFUNC_DEF("sqliteBackupStep", 2, fg_sqlite_backup_step),
     JS_CFUNC_DEF("sqliteBackupFinish", 1, fg_sqlite_backup_finish),
+    JS_CFUNC_DEF("sqliteCreateFunction", 7, fg_sqlite_create_function),
 };
 const size_t graak_sqlite_funcs_count = sizeof(graak_sqlite_funcs) / sizeof(graak_sqlite_funcs[0]);
