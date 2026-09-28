@@ -209,7 +209,11 @@ first use, and a build ships it only when the program or a package it bundles me
 `localeCompare` (`--intl all` or `--intl none` overrides; about 7 MB, 1.5 MB compressed), so a program that never touches
 `Intl` pays nothing for it. Not covered: calendars other than Gregorian, numbering systems other than Latin, ICU's interval
 patterns (`formatRange` joins two full dates with the locale's range separator instead of merging the shared fields), unit
-compositions beyond `X-per-Y`, and ICU's generic zone names in a few zones (Egypt's disambiguating "(Egypt)").
+compositions beyond `X-per-Y`, and ICU's generic zone names in a few zones (Egypt's disambiguating "(Egypt)"). A `dateStyle`
++ `timeStyle` combination that embeds a 12-hour `dayPeriod` puts a plain space before it where Node's ICU puts U+202F
+(narrow no-break space); the field-based options (`hour`/`minute`/`second`/`dayPeriod` listed individually) match. The
+generator captures a locale's time pattern once and reuses it for both, and ICU's own combined-style glue pattern is the
+one case that differs; fixing it needs the generator to sample that glue pattern separately from the plain one.
 
 Verified against real packages, with no Node.js anywhere in the output: **Express 4**, **Fastify** and **Hono**, each
 served from a packaged `linux-modern-x64` build; **`ws`** as a WebSocket server and client exchanging text and 70 KB
