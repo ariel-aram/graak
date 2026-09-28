@@ -10,7 +10,10 @@
  *    the hooks attach to the test or suite whose function is running *synchronously*; after an `await` inside a test, use
  *    `t.test()` (which is unambiguous) rather than a top-level `test()`.
  *  - `run()` runs the files in this process (Node's `isolation: 'none'`), never in child processes.
- *  - Coverage, snapshots, watch mode, test tags, shard and randomize, and `mock.module` are not implemented.
+ *  - Coverage, snapshots, watch mode, test tags, shard and randomize are not implemented. `mock.module` covers the
+ *    CommonJS `require()` path, gated behind `--experimental-test-module-mocks` like Node's own (Node gates it there
+ *    too, for CommonJS as well as ESM); ESM's `import`/`import()` go through the engine's native module loader, which
+ *    this JS-only mock cannot intercept, so ESM mocking stays unavailable regardless of the flag.
  */
 
 import { createMockTools } from "./node-test-mock.js";
@@ -52,7 +55,7 @@ const kShouldAbort = Symbol("kShouldAbort");
 const kIsNodeError = Symbol("kIsNodeError");
 const noop = () => {};
 
-function createTestModule(builtins, globalObject) {
+function createTestModule(builtins, globalObject, moduleMockHooks) {
 	const { process } = builtins;
 	const util = builtins.util;
 	const pathModule = builtins.path;
@@ -2655,11 +2658,21 @@ function createTestModule(builtins, globalObject) {
 
 	/* ------------------------------------------------------------------------------------------------ module */
 
+	// Node gates `mock.module()` behind this flag for CommonJS as well as ESM; match that exactly.
+	const moduleMockingEnabled = [...(process.execArgv ?? []), ...splitArguments(process.env.NODE_OPTIONS ?? "")].includes(
+		"--experimental-test-module-mocks"
+	);
+
 	const { MockTracker } = createMockTools({
 		globalObject,
 		timers: builtins.timers,
 		timersPromises: builtins["timers/promises"],
 		EventEmitter,
+		moduleMockingEnabled,
+		resolveCommonJsModule: moduleMockHooks?.resolveModule,
+		moduleCache: moduleMockHooks?.moduleCache,
+		mockCommonJsModule: moduleMockHooks?.mockCommonJsModule,
+		unmockCommonJsModule: moduleMockHooks?.unmockCommonJsModule,
 	});
 
 	const test = runInParentContext(Test);

@@ -2176,7 +2176,13 @@ const builtins = {
 const SCHEME_ONLY = new Set(["test", "test/reporters"]);
 {
 	let testModules;
-	const load = () => (testModules ??= createTestModule(builtins, globalObject));
+	const load = () =>
+		(testModules ??= createTestModule(builtins, globalObject, {
+			resolveModule,
+			moduleCache,
+			mockCommonJsModule,
+			unmockCommonJsModule,
+		}));
 	let wasiModule;
 	Object.defineProperty(builtins, "wasi", {
 		get: () => (wasiModule ??= createWasi({ fs, path: pathModule, process: processModule, Buffer, os })),
@@ -2239,6 +2245,31 @@ if (streamingChild) {
 /* -------------------------------------------------------- CommonJS require */
 
 const moduleCache = new Map();
+
+/**
+ * `node:test`'s `mock.module()` for the CommonJS side: a resolved module id (an absolute file path, or
+ * `builtin:<name>` for a builtin) maps to a builder that produces the mocked `module.exports`. Keyed independently
+ * of `moduleCache` so a mock can override an already-loaded module and be undone without losing whatever was
+ * cached before it. See `mockCommonJsModule` / `unmockCommonJsModule`, called from `node-test-mock.js`.
+ */
+const moduleMockRegistry = new Map();
+
+/** Installs (or replaces) a CommonJS module mock for a resolved module id. */
+function mockCommonJsModule(id, build, cache) {
+	const hadPrevious = moduleCache.has(id);
+	moduleMockRegistry.set(id, { build, cache, hadPrevious, previous: hadPrevious ? moduleCache.get(id) : undefined });
+	// A module already cached (real or from a previous mock) must not shadow this mock on the very next require().
+	moduleCache.delete(id);
+}
+
+/** Undoes a CommonJS module mock, restoring whatever `moduleCache` entry existed before it (or clearing it). */
+function unmockCommonJsModule(id) {
+	const mocked = moduleMockRegistry.get(id);
+	moduleMockRegistry.delete(id);
+	if (!mocked) return;
+	if (mocked.hadPrevious) moduleCache.set(id, mocked.previous);
+	else moduleCache.delete(id);
+}
 
 function moduleNotFound(specifier, fromDir) {
 	const err = new Error(`Cannot find module '${specifier}' from '${fromDir}'`);
@@ -2652,10 +2683,27 @@ function createRequire(fromFile, parentModule) {
 				code: "ERR_INVALID_ARG_VALUE",
 			});
 		const resolved = resolveModule(specifier, fromDir);
-		if (resolved.builtin) return builtins[resolved.builtin];
+		if (resolved.builtin) {
+			const builtinKey = `builtin:${resolved.builtin}`;
+			if (moduleCache.has(builtinKey)) return moduleCache.get(builtinKey).exports;
+			const mockedBuiltin = moduleMockRegistry.get(builtinKey);
+			if (mockedBuiltin) {
+				const mockedExports = mockedBuiltin.build();
+				if (mockedBuiltin.cache) moduleCache.set(builtinKey, { exports: mockedExports, id: builtinKey, filename: builtinKey, loaded: true });
+				return mockedExports;
+			}
+			return builtins[resolved.builtin];
+		}
 
 		const file = resolved.file;
 		if (moduleCache.has(file)) return moduleCache.get(file).exports;
+
+		const mocked = moduleMockRegistry.get(file);
+		if (mocked) {
+			const mockedExports = mocked.build();
+			if (mocked.cache) moduleCache.set(file, { exports: mockedExports, id: file, filename: file, loaded: true, children: [], paths: [], parent: parentModule });
+			return mockedExports;
+		}
 
 		if (file.endsWith(".json")) {
 			let parsed;

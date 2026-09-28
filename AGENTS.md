@@ -128,7 +128,9 @@ and classic DSA (both reject it); ECDSA with a BLAKE2 digest is the one piece st
 verifies with it but the native host's mbedTLS-backed signer has no BLAKE2 in its digest table to do the same.
 
 What is genuinely still absent, not just narrowed: `node:sqlite` user-defined functions, extensions and `backup()`;
-`node:test`'s `mock.module` (Node needs `--experimental-test-module-mocks` for it too); the inspector's `Profiler`,
+`node:test`'s `mock.module` for ESM (`import`/`import()` go through the engine's native module loader, which no
+JS-only hook can intercept — CommonJS `require()` mocking is implemented, gated behind
+`--experimental-test-module-mocks` exactly as Node gates it, for CommonJS as well as ESM); the inspector's `Profiler`,
 `HeapProfiler` and `Debugger` domains (quickjs has no debugger protocol or profiler to back them); and native addon
 loading on a static host (no dynamic loader there — the packager falls back to a dynamic host automatically). The legacy
 Windows path comes first.

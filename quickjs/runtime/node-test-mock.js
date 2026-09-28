@@ -1,8 +1,15 @@
 /*
- * `node:test`'s mocking: `mock.fn`, `mock.method`, `mock.getter`, `mock.setter`, `mock.property` and `mock.timers`, with the
- * `mock.calls` / `mock.accesses` records Node keeps. The behaviour follows Node's own implementation, checked against
- * Node's output in test/fixtures/web/nodetest-corpus.cjs. `mock.module` is left out: Node itself offers it only under
- * `--experimental-test-module-mocks`.
+ * `node:test`'s mocking: `mock.fn`, `mock.method`, `mock.getter`, `mock.setter`, `mock.property`, `mock.timers` and
+ * `mock.module`, with the `mock.calls` / `mock.accesses` records Node keeps. The behaviour follows Node's own
+ * implementation, checked against Node's output in test/fixtures/web/nodetest-corpus.cjs and mock-module-corpus.cjs.
+ *
+ * `mock.module` matches Node exactly: it does not exist on the tracker at all unless the process was started with
+ * `--experimental-test-module-mocks` (checked against real Node 24.21.0 and 26.9.0 — the flag gates CommonJS
+ * `require()` mocking too, not just ESM, despite the flag's name). Once enabled, it hooks the CommonJS `require()`
+ * path the runtime already has (`node-compat.js`'s module-mock registry, threaded in as `mockCommonJsModule` /
+ * `unmockCommonJsModule` / `resolveCommonJsModule`). ESM's `import` / `import()` go through the quickjs engine's own
+ * native module loader (`fg_sea_module_loader` in `quickjs/native/fg_sea.c`), which no JS-only hook can intercept,
+ * so mocking an ES module stays unavailable here even with the flag — a native-loader gap, not a missed option.
  */
 
 import {
@@ -18,6 +25,7 @@ import {
 	validateInteger,
 	validateNumber,
 	validateObject,
+	validateString,
 	validateStringArray,
 	validateUint32,
 	invalidArgType,
@@ -44,6 +52,47 @@ function findMethodOnPrototypeChain(instance, methodName) {
 	}
 	return descriptor;
 }
+
+/* --------------------------------------------------------------------------------------------------- mock.module */
+
+const stackFrame = /^\s*at (?:.*? \()?(.*?):(\d+):(\d+)\)?$/;
+const SELF_FILE = (() => {
+	const match = stackFrame.exec(new Error().stack.split("\n").find((line) => line.startsWith("    at ")) ?? "");
+	return match?.[1];
+})();
+
+/** The file of whoever called into this module, the way `mock.module()` resolves a relative specifier in Node. */
+function getCallerFile() {
+	for (const line of String(new Error().stack).split("\n")) {
+		const match = stackFrame.exec(line);
+		if (match && match[1] !== SELF_FILE && !match[1].startsWith("node:")) return match[1];
+	}
+	return undefined;
+}
+
+/** CJS interop for a mock: the default export's own properties spread under the named exports, as Node does. */
+function buildCommonJsMockExports({ hasDefault, defaultExport, namedExports }) {
+	if (hasDefault && (defaultExport === null || typeof defaultExport !== "object") && !namedExports) return defaultExport;
+	const result = {};
+	if (hasDefault && defaultExport !== null && typeof defaultExport === "object") Object.assign(result, defaultExport);
+	if (namedExports) for (const key of Object.keys(namedExports)) if (key !== "default") result[key] = namedExports[key];
+	return result;
+}
+
+class MockModuleContext {
+	#unmock;
+	#restored = false;
+	constructor(unmock) {
+		this.#unmock = unmock;
+	}
+	restore() {
+		if (this.#restored) return;
+		this.#restored = true;
+		this.#unmock();
+	}
+}
+
+const { restore: restoreModule } = MockModuleContext.prototype;
 
 class MockFunctionContext {
 	#calls = [];
@@ -191,7 +240,16 @@ class MockPropertyContext {
 const { restore: restoreProperty } = MockPropertyContext.prototype;
 
 function createMockTools(env) {
-	const { globalObject, timers: nodeTimers, timersPromises: nodeTimersPromises, EventEmitter } = env;
+	const {
+		globalObject,
+		timers: nodeTimers,
+		timersPromises: nodeTimersPromises,
+		EventEmitter,
+		moduleMockingEnabled,
+		resolveCommonJsModule,
+		mockCommonJsModule,
+		unmockCommonJsModule,
+	} = env;
 
 	/* ------------------------------------------------------------------------------------------------ mock timers */
 
@@ -698,6 +756,43 @@ function createMockTools(env) {
 			});
 		}
 
+		module(specifier, options = kEmptyObject) {
+			validateString(specifier, "specifier");
+			validateObject(options, "options");
+			const { cache = true, exports, namedExports, defaultExport } = options;
+			validateBoolean(cache, "options.cache");
+			if (namedExports !== undefined) {
+				globalObject.process.emitWarning?.(
+					"mock.module(): options.namedExports is deprecated. Use options.exports instead.",
+					"DeprecationWarning"
+				);
+			}
+			if (defaultExport !== undefined) {
+				globalObject.process.emitWarning?.(
+					"mock.module(): options.defaultExport is deprecated. Use options.exports.default instead.",
+					"DeprecationWarning"
+				);
+			}
+			if (exports !== undefined) validateObject(exports, "options.exports");
+			if (namedExports !== undefined) validateObject(namedExports, "options.namedExports");
+
+			const hasDefault = defaultExport !== undefined || (exports !== undefined && "default" in exports);
+			const defaultValue = defaultExport !== undefined ? defaultExport : exports?.default;
+			const named = exports !== undefined || namedExports !== undefined ? { ...namedExports, ...exports } : undefined;
+
+			const callerFile = getCallerFile();
+			const fromDir = callerFile ? callerFile.replace(/[\\/][^\\/]*$/, "") : globalObject.process.cwd();
+			const resolved = resolveCommonJsModule(specifier, fromDir);
+			const moduleId = resolved.builtin ? `builtin:${resolved.builtin}` : resolved.file;
+
+			const build = () => buildCommonJsMockExports({ hasDefault, defaultExport: defaultValue, namedExports: named });
+			mockCommonJsModule(moduleId, build, cache);
+
+			const ctx = new MockModuleContext(() => unmockCommonJsModule(moduleId));
+			this.#mocks.push({ __proto__: null, ctx, restore: restoreModule });
+			return ctx;
+		}
+
 		reset() {
 			this.restoreAll();
 			this.#timers?.reset();
@@ -763,6 +858,10 @@ function createMockTools(env) {
 			return mock;
 		}
 	}
+
+	// Node itself defines `mock.module` only when started with `--experimental-test-module-mocks`; match that: the
+	// property does not exist at all otherwise, rather than existing and throwing.
+	if (!moduleMockingEnabled) delete MockTracker.prototype.module;
 
 	return { MockTracker, MockTimers };
 }

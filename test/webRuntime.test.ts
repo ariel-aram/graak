@@ -85,6 +85,7 @@ const DIFFERENTIAL: Array<[string, string[]]> = [
 	["pqc-corpus.cjs", []],
 	["repl-corpus.cjs", []],
 	["inspector-corpus.cjs", []],
+	["mock-module-corpus.cjs", ["mock-module-target.cjs"]],
 ];
 
 // The Intl corpora print dates in the machine's zone and use its default locale: pin both, for Node.js and the host alike.
@@ -113,7 +114,15 @@ for (const [fixture, extra] of DIFFERENTIAL) {
 		skip: fixture === "sqlite-corpus.cjs" && !hasNodeSqlite && "this Node.js has no node:sqlite",
 	}, async () => {
 		const root = project([fixture, ...extra]);
-		const onNode = spawnSync(process.execPath, [join(root, fixture)], {
+		// `mock.module()` needs Node's own flag; Node refuses it in NODE_OPTIONS, so it goes on argv for Node. The
+		// engine has no such CLI flag parsing of its own and only ever reads it from NODE_OPTIONS (`execArgv` is
+		// always empty there), so the host gets it that way instead.
+		const nodeArgs = fixture === "mock-module-corpus.cjs" ? ["--experimental-test-module-mocks"] : [];
+		const hostEnv =
+			fixture === "mock-module-corpus.cjs"
+				? { ...PINNED_ENV, NODE_OPTIONS: "--experimental-test-module-mocks" }
+				: PINNED_ENV;
+		const onNode = spawnSync(process.execPath, [...nodeArgs, join(root, fixture)], {
 			encoding: "utf-8",
 			timeout: 120_000,
 			env: PINNED_ENV,
@@ -125,7 +134,7 @@ for (const [fixture, extra] of DIFFERENTIAL) {
 		const onHost = spawnSync(launcher, [], {
 			encoding: "utf-8",
 			timeout: 240_000,
-			env: PINNED_ENV,
+			env: hostEnv,
 			maxBuffer: 64 * 1024 * 1024,
 		});
 		assert.equal(onHost.status, 0, `host failed:\n${onHost.stdout}${onHost.stderr}`);
