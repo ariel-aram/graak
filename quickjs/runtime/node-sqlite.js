@@ -265,11 +265,48 @@ function createSqlite({ native, Buffer, platform = globalThis.process?.platform 
 			return statement;
 		}
 
-		function() {
-			throw sqliteError(
-				"User-defined functions are not available in the Graak SQLite build",
-				"ERR_FEATURE_UNAVAILABLE_ON_PLATFORM"
-			);
+		/*
+		 * A scalar SQL function, bound through sqlite3_create_function_v2() (quickjs/native/fg_sqlite.c). Node's own
+		 * argument shape and validation: db.function(name, fn) or db.function(name, options, fn) -- a 3-argument
+		 * call requires options to be an object even if none of its keys are set, matching DatabaseSync::CustomFunction.
+		 */
+		function(name, ...rest) {
+			this._live();
+			if (typeof name !== "string")
+				throw Object.assign(new TypeError('The "name" argument must be a string.'), { code: "ERR_INVALID_ARG_TYPE" });
+
+			let options, fn;
+			if (rest.length < 2) {
+				fn = rest[0];
+			} else {
+				[options, fn] = rest;
+				if (typeof options !== "object" || options === null)
+					throw Object.assign(new TypeError('The "options" argument must be an object.'), {
+						code: "ERR_INVALID_ARG_TYPE",
+					});
+			}
+
+			const flag = (key) => {
+				const v = options?.[key];
+				if (v === undefined) return false;
+				if (typeof v !== "boolean")
+					throw Object.assign(new TypeError(`The "options.${key}" argument must be a boolean.`), {
+						code: "ERR_INVALID_ARG_TYPE",
+					});
+				return v;
+			};
+			const useBigIntArguments = flag("useBigIntArguments");
+			const varargs = flag("varargs");
+			const deterministic = flag("deterministic");
+			const directOnly = flag("directOnly");
+
+			if (typeof fn !== "function")
+				throw Object.assign(new TypeError('The "function" argument must be a function.'), {
+					code: "ERR_INVALID_ARG_TYPE",
+				});
+
+			const arity = varargs ? -1 : fn.length;
+			native.sqliteCreateFunction(this._handle, name, arity, deterministic, directOnly, useBigIntArguments, fn);
 		}
 		loadExtension() {
 			throw sqliteError(

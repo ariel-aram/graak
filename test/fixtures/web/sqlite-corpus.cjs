@@ -72,6 +72,121 @@ readonly.close();
 fs.rmSync(dir, { recursive: true, force: true });
 
 /*
+ * function(): a scalar SQL function bound through sqlite3_create_function_v2(). Return values, argument coercion
+ * and the options node:sqlite documents (deterministic, directOnly, varargs, useBigIntArguments) are checked; the
+ * flags a function is registered with are used through the query planner, not observable in a query's own output,
+ * so the corpus checks only that the calls succeed and the function still runs correctly under them.
+ */
+function udfTests() {
+	const fdb = new DatabaseSync(":memory:");
+	fdb.exec("CREATE TABLE t (x)");
+	fdb.exec("INSERT INTO t VALUES (1), (2), (3)");
+
+	fdb.function("add1", (a) => a + 1);
+	say("udf basic", fdb.prepare("SELECT add1(x) AS y FROM t ORDER BY x").all());
+
+	fdb.function("sum", { varargs: true }, (...args) => args.reduce((a, b) => a + b, 0));
+	say("udf varargs", fdb.prepare("SELECT sum(1, 2, 3) AS s").get(), fdb.prepare("SELECT sum() AS s").get());
+
+	fdb.function("twice", { deterministic: true }, (a) => a * 2);
+	say("udf deterministic", fdb.prepare("SELECT twice(x) AS y FROM t ORDER BY x").all());
+
+	fdb.function("directonly", { directOnly: true }, (a) => a);
+	say("udf directOnly", fdb.prepare("SELECT directonly(5) AS v").get());
+
+	fdb.function("argtype", { useBigIntArguments: true }, (a) => `${typeof a}:${a}`);
+	say("udf useBigIntArguments", fdb.prepare("SELECT argtype(3) AS v, argtype(3.5) AS w").get());
+	fdb.function("argtypeNoBig", (a) => `${typeof a}:${a}`);
+	say("udf number arguments (default)", fdb.prepare("SELECT argtypeNoBig(3) AS v").get());
+
+	fdb.function("boom", () => {
+		throw new RangeError("kaboom");
+	});
+	try {
+		fdb.prepare("SELECT boom() AS v").get();
+	} catch (e) {
+		say("udf throws", e.constructor.name, e.message);
+	}
+	try {
+		fdb.exec("SELECT boom() FROM t");
+	} catch (e) {
+		say("udf throws in exec", e.constructor.name, e.message);
+	}
+
+	fdb.function("fixedArity", (a, b) => a + b);
+	try {
+		fdb.prepare("SELECT fixedArity(1) AS v").get();
+	} catch (e) {
+		say("udf wrong arity", e.code, /wrong number of arguments/.test(e.message));
+	}
+
+	say("udf return types", fdb.prepare("SELECT typeof(add1(1)) AS numType").get());
+	fdb.function("retnull", () => null);
+	fdb.function("retundef", () => undefined);
+	fdb.function("retbig", () => 123n);
+	fdb.function("retbuf", () => Buffer.from("hi"));
+	fdb.function("retu8", () => new Uint8Array([1, 2, 3]));
+	say(
+		"udf return values",
+		fdb.prepare("SELECT retnull() a, retundef() b, retbig() c, retbuf() d, retu8() e").get()
+	);
+	fdb.function("retoobig", () => 99999999999999999999999n);
+	try {
+		fdb.prepare("SELECT retoobig() AS v").get();
+	} catch (e) {
+		say("udf bigint overflow", e.code, e.message);
+	}
+	fdb.function("retbad", () => ({ nope: true }));
+	try {
+		fdb.prepare("SELECT retbad() AS v").get();
+	} catch (e) {
+		say("udf bad return type", e.code, e.message);
+	}
+
+	fdb.function("echo", (a) => `${typeof a}:${a}`);
+	fdb.exec("CREATE TABLE big (x)");
+	fdb.exec("INSERT INTO big VALUES (9007199254740993)");
+	try {
+		fdb.prepare("SELECT echo(x) AS v FROM big").get();
+	} catch (e) {
+		say("udf arg overflow", e.constructor.name, e.code, e.message);
+	}
+
+	try {
+		fdb.function(123, () => 1);
+	} catch (e) {
+		say("udf bad name", e.constructor.name, e.code, e.message);
+	}
+	try {
+		fdb.function("x", 5, () => 1);
+	} catch (e) {
+		say("udf bad options", e.constructor.name, e.code, e.message);
+	}
+	try {
+		fdb.function("x", {});
+	} catch (e) {
+		say("udf bad fn", e.constructor.name, e.code, e.message);
+	}
+	try {
+		fdb.function("x", { deterministic: 1 }, () => 1);
+	} catch (e) {
+		say("udf bad option flag", e.constructor.name, e.code, e.message);
+	}
+
+	fdb.function("redefine", () => 1);
+	fdb.function("redefine", () => 2);
+	say("udf redefine", fdb.prepare("SELECT redefine() AS v").get());
+
+	fdb.close();
+	try {
+		fdb.function("late", () => 1);
+	} catch (e) {
+		say("udf on closed db", e.constructor.name, e.code, e.message);
+	}
+}
+udfTests();
+
+/*
  * backup(): a standalone async function, not a DatabaseSync method. Page counts vary by SQLite version, so only the
  * relationships between what backup() returns and reports to `progress` are checked, not literal numbers.
  */
