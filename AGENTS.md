@@ -123,9 +123,10 @@ Independent gaps can be worked at the same time by separate agents, each in its 
 
 TLS client options, Brotli/Zstd, `crypto` DH/ECDH/primes/X509, HTTP/2, `v8.Serializer`, `URLPattern`, the libuv subset on
 Windows, cluster, wasi, repl and inspector are all closed; see the README's per-module rows for what each one covers and its
-own small known gaps. `createSign`/`createVerify`/`crypto.sign`/`crypto.verify` with a BLAKE2 digest now match Node for RSA
-and classic DSA (both reject it); ECDSA with a BLAKE2 digest is the one piece still open, since Node itself signs and
-verifies with it but the native host's mbedTLS-backed signer has no BLAKE2 in its digest table to do the same.
+own small known gaps. `createSign`/`createVerify`/`crypto.sign`/`crypto.verify` with a BLAKE2 digest now match Node for RSA,
+classic DSA (both reject it) and ECDSA (Node signs and verifies with it like any other digest, and so does the host: the
+digest is computed in JavaScript and handed to mbedTLS as already-hashed bytes, since mbedTLS's own digest table has no
+BLAKE2 entry to compute it from the name).
 
 What is genuinely still absent, not just narrowed: `node:sqlite` user-defined functions, extensions and `backup()`;
 `node:test`'s `mock.module` for ESM (`import`/`import()` go through the engine's native module loader, which no

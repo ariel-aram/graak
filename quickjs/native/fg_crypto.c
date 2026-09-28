@@ -808,6 +808,85 @@ static JSValue fg_pk_verify_ex(JSContext *ctx, JSValueConst this_val, int argc, 
     return JS_NewBool(ctx, ok);
 }
 
+static JSValue fg_c_not_ec(JSContext *ctx)
+{
+    return fg_c_throw(ctx, "ERR_OSSL_EVP_OPERATION_NOT_SUPPORTED_FOR_THIS_KEYTYPE",
+                      "error:03000096:digital envelope routines::operation not supported for this keytype", 0);
+}
+
+static int fg_c_is_ec(mbedtls_pk_context *pk)
+{
+    mbedtls_pk_type_t t = mbedtls_pk_get_type(pk);
+    return t == MBEDTLS_PK_ECKEY || t == MBEDTLS_PK_ECKEY_DH || t == MBEDTLS_PK_ECDSA;
+}
+
+/* pkSignRawEc(key, passphrase, digest): ECDSA-sign a digest the caller already computed (BLAKE2b512/BLAKE2s256,
+ * which mbedTLS's own digest table has no entry for — see fg_c_md). Unlike RSA and classic DSA, Node does not
+ * restrict which digest ECDSA signs with, and mbedTLS's ECDSA math needs only the digest bytes and their length:
+ * mbedtls_ecdsa_read_signature ignores its md_alg argument outright, and the deterministic (RFC 6979) signer only
+ * feeds md_alg to the nonce-derivation HMAC-DRBG, which just needs any valid digest to key that DRBG with — it has
+ * no bearing on whether the (r, s) it produces verifies. MBEDTLS_MD_NONE is refused there, so SHA-256 stands in. */
+static JSValue fg_pk_sign_raw_ec(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    const char *pass = NULL;
+    fg_c_input key;
+    fg_c_key k;
+    size_t dlen = 0, siglen = 0;
+    uint8_t *digest;
+    unsigned char sig[MBEDTLS_PK_SIGNATURE_MAX_SIZE];
+    int ret;
+
+    if (fg_c_input_get(ctx, argv[0], &key)) return JS_EXCEPTION;
+    if (JS_IsString(argv[1])) pass = JS_ToCString(ctx, argv[1]);
+    digest = JS_GetUint8Array(ctx, &dlen, argv[2]);
+    if (!digest) {
+        fg_c_release(&key);
+        if (pass) JS_FreeCString(ctx, pass);
+        return JS_EXCEPTION;
+    }
+    ret = fg_c_key_load(&k, key.p, key.len, pass, 1);
+    fg_c_release(&key);
+    if (pass) JS_FreeCString(ctx, pass);
+    if (ret != 0) return fg_c_throw(ctx, "ERR_OSSL_UNSUPPORTED", "private key", ret);
+    if (!fg_c_is_ec(k.pk)) {
+        fg_c_key_free(&k);
+        return fg_c_not_ec(ctx);
+    }
+    ret = mbedtls_pk_sign(k.pk, MBEDTLS_MD_SHA256, digest, dlen, sig, sizeof(sig), &siglen, mbedtls_ctr_drbg_random, &fg_drbg);
+    fg_c_key_free(&k);
+    if (ret != 0) return fg_c_throw(ctx, "ERR_OSSL_RSA_DIGEST_TOO_BIG_FOR_RSA_KEY", "sign", ret);
+    return fg_c_bytes(ctx, sig, siglen);
+}
+
+/* pkVerifyRawEc(key, digest, signature): the verify side of pkSignRawEc. mbedtls_ecdsa_read_signature never looks
+ * at md_alg, so MBEDTLS_MD_NONE is fine here (only the sign side's nonce derivation needs a real one). */
+static JSValue fg_pk_verify_raw_ec(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    fg_c_input key;
+    fg_c_key k;
+    size_t dlen = 0, slen = 0;
+    uint8_t *digest, *sig;
+    int ret, ok = 0;
+
+    if (fg_c_input_get(ctx, argv[0], &key)) return JS_EXCEPTION;
+    digest = JS_GetUint8Array(ctx, &dlen, argv[1]);
+    sig = JS_GetUint8Array(ctx, &slen, argv[2]);
+    if (!digest || !sig) {
+        fg_c_release(&key);
+        return JS_EXCEPTION;
+    }
+    ret = fg_c_key_load(&k, key.p, key.len, NULL, 0);
+    fg_c_release(&key);
+    if (ret != 0) return fg_c_throw(ctx, "ERR_OSSL_UNSUPPORTED", "public key", ret);
+    if (!fg_c_is_ec(k.pk)) {
+        fg_c_key_free(&k);
+        return fg_c_not_ec(ctx);
+    }
+    ok = mbedtls_pk_verify(k.pk, MBEDTLS_MD_NONE, digest, dlen, sig, slen) == 0;
+    fg_c_key_free(&k);
+    return JS_NewBool(ctx, ok);
+}
+
 /* ------------------------------------------------------------------ ECDH */
 
 static int fg_c_ec_grp(const char *name, mbedtls_ecp_group *grp)
@@ -2568,6 +2647,8 @@ const JSCFunctionListEntry graak_crypto_funcs[] = {
     JS_CFUNC_DEF("rsaCrypt", 7, fg_rsa_crypt),
     JS_CFUNC_DEF("pkSignEx", 6, fg_pk_sign_ex),
     JS_CFUNC_DEF("pkVerifyEx", 6, fg_pk_verify_ex),
+    JS_CFUNC_DEF("pkSignRawEc", 3, fg_pk_sign_raw_ec),
+    JS_CFUNC_DEF("pkVerifyRawEc", 3, fg_pk_verify_raw_ec),
     JS_CFUNC_DEF("ecdhGenerate", 2, fg_ecdh_generate),
     JS_CFUNC_DEF("ecdhCompute", 3, fg_ecdh_compute),
     JS_CFUNC_DEF("ecdhConvert", 3, fg_ecdh_convert),

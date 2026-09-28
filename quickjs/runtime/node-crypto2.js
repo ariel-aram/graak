@@ -11,6 +11,7 @@
  */
 
 import { MODP_PRIMES } from "./node-crypto-dh.js";
+import { newBlake2 } from "./node-blake2.js";
 
 const OID_RSA = "1.2.840.113549.1.1.1";
 const OID_EC = "1.2.840.10045.2.1";
@@ -849,9 +850,11 @@ function createAsymmetric({ native, Buffer, stream, toBytes, hashName, out, conc
 	const noContext = () => codeError(Error, "ERR_CRYPTO_OPERATION_FAILED", "Context parameter is unsupported");
 	const notForKeyType = () => codeError(Error, "ERR_OSSL_EVP_OPERATION_NOT_SUPPORTED_FOR_THIS_KEYTYPE", "error:03000096:digital envelope routines::operation not supported for this keytype");
 	const invalidDigest = () => codeError(Error, "ERR_OSSL_INVALID_DIGEST", "error:1C80007A:Provider routines::invalid digest");
-	/* Node's OpenSSL provider refuses BLAKE2 as the digest for RSA and classic DSA signing (ECDSA is not restricted
-	 * the same way, but that needs a digest the native host's mbedTLS-backed signer can compute internally, which
-	 * BLAKE2 is not, so it still falls through to the host's own "Invalid digest" below). */
+	/* Node's OpenSSL provider refuses BLAKE2 as the digest for RSA and classic DSA signing, but not for ECDSA: Node
+	 * signs and verifies with it like any other digest. The native host's mbedTLS-backed signer has no BLAKE2 in its
+	 * digest table (fg_c_md), so for the EC case the digest is computed here in JavaScript (node-blake2.js) and
+	 * handed to the host as already-hashed bytes via pkSignRawEc/pkVerifyRawEc, which sign or verify it directly
+	 * instead of hashing the message themselves. */
 	const isBlake2Digest = (name) => name === "blake2b512" || name === "blake2s256";
 	const digestNotAllowed = () => codeError(Error, "ERR_OSSL_DIGEST_NOT_ALLOWED", "error:1C8000AE:Provider routines::digest not allowed");
 
@@ -899,11 +902,14 @@ function createAsymmetric({ native, Buffer, stream, toBytes, hashName, out, conc
 		if (context) throw noContext();
 		const material = nativeKey(parsed, true);
 		const digest = digestOf(algorithm, oneShot);
+		let signature;
 		if (isBlake2Digest(digest)) {
 			const keyType = (material.info ?? infoOf(material.data, material.passphrase, true)).type;
 			if (keyType !== "ec") throw digestNotAllowed();
+			signature = native.pkSignRawEc(material.data, material.passphrase, newBlake2(digest).update(data).digest());
+		} else {
+			signature = native.pkSignEx(digest, material.data, material.passphrase, data, padding, saltLength === -1 ? -1 : saltLength);
 		}
-		let signature = native.pkSignEx(digest, material.data, material.passphrase, data, padding, saltLength === -1 ? -1 : saltLength);
 		const info = material.info ?? (parsed.keyObject ? parsed.keyObject._asym.info : null);
 		if (dsaEncoding === "ieee-p1363") {
 			const keyInfo = info ?? infoOf(material.data, material.passphrase, true);
@@ -940,17 +946,20 @@ function createAsymmetric({ native, Buffer, stream, toBytes, hashName, out, conc
 		let bytes = toBytes(signature);
 		const digest = digestOf(algorithm, oneShot);
 		let info = material.info ?? null;
+		let ecBlake2 = false;
 		if (isBlake2Digest(digest)) {
 			info ??= infoOf(material.data, material.passphrase, false);
 			if (info.type !== "ec") {
 				if (oneShot) throw digestNotAllowed();
 				return false;
 			}
+			ecBlake2 = true;
 		}
 		if ((options.dsaEncoding ?? "der") === "ieee-p1363") {
 			info ??= infoOf(material.data, material.passphrase, false);
 			if (info.type === "ec") bytes = dsaRawToDer(bytes);
 		}
+		if (ecBlake2) return native.pkVerifyRawEc(material.data, newBlake2(digest).update(data).digest(), bytes);
 		return native.pkVerifyEx(digest, material.data, data, bytes, options.padding === RSA_PSS ? 1 : 0, options.saltLength ?? -2);
 	};
 
