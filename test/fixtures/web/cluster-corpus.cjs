@@ -32,7 +32,16 @@ if (cluster.isWorker) {
 			if (m === "bye") worker.disconnect();
 		});
 	} else {
-		const server = http.createServer((req, res) => res.end(String(worker.id)));
+		const server = http.createServer((req, res) =>
+			res.end(
+				JSON.stringify({
+					id: worker.id,
+					remoteAddress: req.socket.remoteAddress,
+					remotePort: req.socket.remotePort,
+					remoteFamily: req.socket.remoteFamily,
+				}),
+			),
+		);
 		server.listen(port, () => {
 			process.send({ listening: server.address().port, id: worker.id });
 		});
@@ -71,6 +80,16 @@ async function main() {
 					res.on("end", () => resolve(body));
 				})
 				.on("error", reject);
+		});
+	const getWithLocalPort = (port) =>
+		new Promise((resolve, reject) => {
+			const req = http.get({ port, host: "127.0.0.1", agent: false }, (res) => {
+				const localPort = res.socket.localPort;
+				let body = "";
+				res.on("data", (d) => (body += d));
+				res.on("end", () => resolve({ body, localPort }));
+			});
+			req.on("error", reject);
 		});
 	const freePort = () =>
 		new Promise((resolve) => {
@@ -150,8 +169,19 @@ async function main() {
 		say("worker address", reported);
 
 		const answers = new Set();
-		for (let i = 0; i < 8; i++) answers.add(await get(port));
-		say("served by", [...answers].sort().length, [...answers].every((a) => workers.some((w) => String(w.id) === a)));
+		for (let i = 0; i < 8; i++) answers.add(JSON.parse(await get(port)).id);
+		say("served by", [...answers].sort().length, [...answers].every((a) => workers.some((w) => w.id === a)));
+
+		// The proxied connection a worker sees must report the real client's address/port, not the primary's
+		// loopback proxy hop's own (unrelated, ephemeral) source port.
+		const { body: remoteBody, localPort: clientLocalPort } = await getWithLocalPort(port);
+		const remote = JSON.parse(remoteBody);
+		say(
+			"remote address",
+			remote.remotePort === clientLocalPort,
+			remote.remoteAddress === "127.0.0.1" || remote.remoteAddress === "::1" || remote.remoteAddress === "::ffff:127.0.0.1",
+			typeof remote.remoteFamily,
+		);
 
 		const reply = nextMessage(workers[0], (m) => m && m.echo !== undefined);
 		workers[0].send({ n: 1 });
@@ -170,8 +200,8 @@ async function main() {
 		await new Promise((resolve) => setTimeout(resolve, 100));
 		say("crash", order, worker.exitedAfterDisconnect, worker.state, Object.keys(cluster.workers).length);
 		const answers = new Set();
-		for (let i = 0; i < 4; i++) answers.add(await get(port));
-		say("survivor serves", [...answers], String(workers[1].id));
+		for (let i = 0; i < 4; i++) answers.add(JSON.parse(await get(port)).id);
+		say("survivor serves", [...answers], workers[1].id);
 	}
 
 	// ---- a busy port -------------------------------------------------------------------------------------------------------

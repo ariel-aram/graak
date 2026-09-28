@@ -5,8 +5,14 @@
  * before 10 has no AF_UNIX to carry them), so the primary owns the listening socket instead: a worker that calls
  * server.listen(port) binds a private server on 127.0.0.1 with an ephemeral port, tells the primary, and the primary
  * accepts on the real address and proxies each connection to the next worker in round-robin order. Every worker
- * sees the address the program asked for. The one visible difference is that a proxied connection reports the
- * primary's loopback peer address (127.0.0.1), not the client's.
+ * sees the address the program asked for. Since the proxy hop would otherwise make every connection look like it
+ * came from the primary's loopback peer, the primary also sends the real remote address/port/family for each
+ * connection to the target worker over the existing IPC channel (one "connection" message per proxied connection,
+ * in the same order the primary opens the upstream sockets). The worker matches each message to the next accepted
+ * socket on that server, in arrival order, and reports the real values as `socket.remoteAddress`/`remotePort`/
+ * `remoteFamily`. This is in-order correlation, not a stream-level protocol, so it never touches the proxied bytes
+ * themselves and cannot corrupt HTTP/TLS traffic; it only has to win the race against the client's own first byte
+ * reaching the worker, which requires a second network hop it doesn't need.
  */
 
 const SCHED_NONE = 1;
@@ -256,6 +262,17 @@ export function createCluster({ EventEmitter, childProcess, net, tls, process })
 				return;
 			}
 			const upstream = net.connect({ host: "127.0.0.1", port: target.port });
+			// Tell the target worker who the real peer is, over IPC rather than in-band: sent right away, well
+			// ahead of the client's own bytes, which still have to make the client -> primary -> worker round trip.
+			if (target.worker.isConnected()) {
+				send(target.worker.process, {
+					act: "connection",
+					internalPort: target.port,
+					address: client.remoteAddress,
+					port: client.remotePort,
+					family: client.remoteFamily,
+				});
+			}
 			client.pipe(upstream);
 			upstream.pipe(client);
 			const drop = () => {
@@ -303,6 +320,25 @@ export function createCluster({ EventEmitter, childProcess, net, tls, process })
 			}
 		};
 
+		// Real remote address/port/family for each proxied connection, keyed by the private server's internal port
+		// (see route() on the primary side): one FIFO queue of not-yet-matched infos, and one of sockets that beat
+		// their info message here, per port. Correlation is by arrival order: the primary sends the "connection"
+		// message right when it opens the upstream connection, but the IPC channel and the loopback TCP hop race
+		// independently, so a socket can still be accepted before its info arrives. When that happens the socket
+		// is held paused (see the "connection" listener below) until the matching info shows up here, so nothing
+		// downstream (http, tls, ...) ever reads a byte off it while it would still report the wrong peer.
+		const remoteQueues = new Map();
+		const remoteBucket = (internalPort) => {
+			let bucket = remoteQueues.get(internalPort);
+			if (!bucket) remoteQueues.set(internalPort, (bucket = { infos: [], sockets: [] }));
+			return bucket;
+		};
+		const applyRemote = (socket, info) => {
+			if (info.address !== undefined) Object.defineProperty(socket, "remoteAddress", { value: info.address, configurable: true });
+			if (info.port !== undefined) Object.defineProperty(socket, "remotePort", { value: info.port, configurable: true });
+			if (info.family !== undefined) Object.defineProperty(socket, "remoteFamily", { value: info.family, configurable: true });
+		};
+
 		process.on("internalMessage", (message) => {
 			if (!message || message.cmd !== CMD) return;
 			if (message.act === "queryServerReply") {
@@ -310,6 +346,15 @@ export function createCluster({ EventEmitter, childProcess, net, tls, process })
 				replies.delete(message.seq);
 				done?.(message);
 			} else if (message.act === "disconnect") disconnectWorker();
+			else if (message.act === "connection") {
+				const bucket = remoteBucket(message.internalPort);
+				const socket = bucket.sockets.shift();
+				const info = { address: message.address, port: message.port, family: message.family };
+				if (socket) {
+					applyRemote(socket, info);
+					socket.resume();
+				} else bucket.infos.push(info);
+			}
 		});
 
 		function disconnectWorker() {
@@ -381,6 +426,23 @@ export function createCluster({ EventEmitter, childProcess, net, tls, process })
 				this._clusterPort = internalPort;
 				servers.add(this);
 				refresh();
+				// Match each accepted connection, in arrival order, to the remote-address info the primary sent for
+				// it. Runs ahead of the application's own "connection" listener (http/tls attach theirs at
+				// construction time, well before this fires) so a socket whose info hasn't arrived yet can be held
+				// paused -- nothing downstream reads a byte off it until the real remoteAddress/remotePort are set.
+				this.prependListener("connection", (socket) => {
+					const bucket = remoteBucket(internalPort);
+					const info = bucket.infos.shift();
+					if (info) applyRemote(socket, info);
+					else {
+						socket.pause();
+						bucket.sockets.push(socket);
+						socket.once("close", () => {
+							const index = bucket.sockets.indexOf(socket);
+							if (index !== -1) bucket.sockets.splice(index, 1);
+						});
+					}
+				});
 				const id = ++seq;
 				replies.set(id, (reply) => {
 					if (reply.error) {
