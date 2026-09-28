@@ -1,5 +1,5 @@
 // node:sqlite: what a program can observe of the database. Must print exactly what Node.js prints.
-const { DatabaseSync } = require("node:sqlite");
+const { DatabaseSync, backup } = require("node:sqlite");
 const out = [];
 const say = (...a) => out.push(a.map((x) => (typeof x === "string" ? x : JSON.stringify(x, (_k, v) => (typeof v === "bigint" ? `${v}n` : v instanceof Uint8Array ? `u8[${[...v]}]` : v)))).join(" "));
 
@@ -70,4 +70,124 @@ const readonly = new DatabaseSync(file, { readOnly: true });
 try { readonly.exec("INSERT INTO t VALUES ('b', 2)"); } catch (e) { say("readonly", e.code); }
 readonly.close();
 fs.rmSync(dir, { recursive: true, force: true });
-for (const l of out) console.log(l);
+
+/*
+ * backup(): a standalone async function, not a DatabaseSync method. Page counts vary by SQLite version, so only the
+ * relationships between what backup() returns and reports to `progress` are checked, not literal numbers.
+ */
+async function backupTests() {
+	const dir2 = fs.mkdtempSync(path.join(require("os").tmpdir(), "graak-sqlite-backup-"));
+	const srcPath = path.join(dir2, "src.db");
+	const destPath = path.join(dir2, "dest.db");
+
+	const src = new DatabaseSync(srcPath);
+	src.exec("CREATE TABLE big (id INTEGER PRIMARY KEY, v TEXT)");
+	const ins = src.prepare("INSERT INTO big (v) VALUES (?)");
+	for (let i = 0; i < 500; i++) ins.run(`row-${i}-${"x".repeat(80)}`);
+
+	const calls = [];
+	const total = await backup(src, destPath, { rate: 3, progress: (info) => calls.push(info) });
+	const totalsMatch = calls.every((c) => c.totalPages === total);
+	const decreasing = calls.every((c, i) => i === 0 || c.remainingPages < calls[i - 1].remainingPages);
+	const lastPositive = calls.length === 0 || calls[calls.length - 1].remainingPages > 0;
+	const expectedCalls = Math.max(0, Math.ceil(total / 3) - 1);
+	say("backup basic", total > 0, calls.length === expectedCalls, totalsMatch, decreasing, lastPositive);
+
+	const dest = new DatabaseSync(destPath);
+	say("backup rows", dest.prepare("SELECT count(*) AS n FROM big").get());
+	dest.close();
+
+	// Defaults: no progress, rate 100.
+	const destDefaults = path.join(dir2, "dest-defaults.db");
+	const totalDefaults = await backup(src, destDefaults);
+	say("backup defaults", totalDefaults === total);
+	const destDefaultsDb = new DatabaseSync(destDefaults);
+	say("backup defaults rows", destDefaultsDb.prepare("SELECT count(*) AS n FROM big").get());
+	destDefaultsDb.close();
+
+	// options.source: an attached database, not "main".
+	const auxPath = path.join(dir2, "aux.db").replace(/'/g, "''");
+	src.exec(`ATTACH DATABASE '${auxPath}' AS aux`);
+	src.exec("CREATE TABLE aux.u (y)");
+	src.prepare("INSERT INTO aux.u VALUES (2)").run();
+	const destAux = path.join(dir2, "dest-aux.db");
+	const totalAux = await backup(src, destAux, { source: "aux" });
+	say("backup source option", totalAux > 0);
+	const destAuxDb = new DatabaseSync(destAux);
+	say(
+		"backup source option tables",
+		destAuxDb.prepare("SELECT name FROM sqlite_master WHERE type='table'").all()
+	);
+	destAuxDb.close();
+
+	// Synchronous argument validation, same as Node's: it throws before any promise is involved.
+	try {
+		backup(42, destPath);
+	} catch (e) {
+		say("backup bad source type", e.constructor.name, e.code, e.message);
+	}
+	try {
+		backup(src, 42);
+	} catch (e) {
+		say("backup bad destination type", e.constructor.name, e.code, e.message);
+	}
+	try {
+		backup(src, destPath, 5);
+	} catch (e) {
+		say("backup bad options type", e.constructor.name, e.code, e.message);
+	}
+	try {
+		backup(src, destPath, { rate: 1.5 });
+	} catch (e) {
+		say("backup bad rate", e.constructor.name, e.code, e.message);
+	}
+	try {
+		backup(src, destPath, { rate: 0 });
+	} catch (e) {
+		say("backup rate not positive", e.constructor.name, e.code, e.message);
+	}
+	try {
+		backup(src, destPath, { progress: 1 });
+	} catch (e) {
+		say("backup bad progress", e.constructor.name, e.code, e.message);
+	}
+	const closedDb = new DatabaseSync(":memory:");
+	closedDb.close();
+	try {
+		backup(closedDb, destPath);
+	} catch (e) {
+		say("backup closed source", e.constructor.name, e.code, e.message);
+	}
+	src.close();
+
+	// Asynchronous errors: opening the destination or resolving options.source/target happens after backup() returns.
+	const open = new DatabaseSync(":memory:");
+	open.exec("CREATE TABLE t (x)");
+	try {
+		await backup(open, path.join(dir2, "no-such-dir", "out.db"));
+		say("backup bad path", "no error");
+	} catch (e) {
+		say("backup bad path", e.constructor.name, e.code, /unable to open database file/.test(e.message));
+	}
+	try {
+		await backup(open, path.join(dir2, "dest-bad-source.db"), { source: "does-not-exist" });
+		say("backup bad source name", "no error");
+	} catch (e) {
+		say("backup bad source name", e.constructor.name, e.code, /unknown database/.test(e.message));
+	}
+	open.close();
+
+	fs.rmSync(dir2, { recursive: true, force: true });
+}
+
+backupTests().then(
+	() => {
+		for (const l of out) console.log(l);
+		process.exit(0);
+	},
+	(e) => {
+		console.log(out.join("\n"));
+		console.log("FAILED", e && e.stack);
+		process.exit(1);
+	}
+);

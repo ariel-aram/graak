@@ -284,6 +284,75 @@ function createSqlite({ native, Buffer, platform = globalThis.process?.platform 
 		}
 	}
 
+	/*
+	 * Standalone async function, not a DatabaseSync method, matching node:sqlite. Argument and option validation
+	 * throws synchronously, as Node's does; opening the destination and copying pages happens after, so those
+	 * errors (and a normal result) arrive through the returned promise, also as in Node.
+	 */
+	function backup(sourceDb, destination, ...rest) {
+		if (!(sourceDb instanceof DatabaseSync))
+			throw Object.assign(new TypeError('The "sourceDb" argument must be an object.'), { code: "ERR_INVALID_ARG_TYPE" });
+		const handle = sourceDb._live();
+		// Same argument as DatabaseSync's own constructor: a string, Uint8Array or file: URL, no null bytes.
+		const destPath = toDbPath(destination);
+
+		let rate = 100;
+		let source = "main";
+		let target = "main";
+		let progress;
+		if (rest.length > 0) {
+			const options = rest[0];
+			if (typeof options !== "object" || options === null)
+				throw Object.assign(new TypeError('The "options" argument must be an object.'), { code: "ERR_INVALID_ARG_TYPE" });
+			if (options.rate !== undefined) {
+				if (!Number.isInteger(options.rate))
+					throw Object.assign(new TypeError('The "options.rate" argument must be an integer.'), {
+						code: "ERR_INVALID_ARG_TYPE",
+					});
+				if (options.rate <= 0)
+					throw Object.assign(new RangeError('The "options.rate" argument must be a positive integer.'), {
+						code: "ERR_OUT_OF_RANGE",
+					});
+				rate = options.rate;
+			}
+			if (options.source !== undefined) {
+				if (typeof options.source !== "string")
+					throw Object.assign(new TypeError('The "options.source" argument must be a string.'), {
+						code: "ERR_INVALID_ARG_TYPE",
+					});
+				source = options.source;
+			}
+			if (options.target !== undefined) {
+				if (typeof options.target !== "string")
+					throw Object.assign(new TypeError('The "options.target" argument must be a string.'), {
+						code: "ERR_INVALID_ARG_TYPE",
+					});
+				target = options.target;
+			}
+			if (options.progress !== undefined) {
+				if (typeof options.progress !== "function")
+					throw Object.assign(new TypeError('The "options.progress" argument must be a function.'), {
+						code: "ERR_INVALID_ARG_TYPE",
+					});
+				progress = options.progress;
+			}
+		}
+
+		return (async () => {
+			const id = native.sqliteBackupInit(handle, source, destPath, target);
+			try {
+				for (;;) {
+					const [done, totalPages, remainingPages] = native.sqliteBackupStep(id, rate);
+					if (done) return totalPages;
+					if (progress) progress({ totalPages, remainingPages });
+				}
+			} catch (e) {
+				native.sqliteBackupFinish(id);
+				throw e;
+			}
+		})();
+	}
+
 	const node = {
 		DatabaseSync,
 		StatementSync,
@@ -297,12 +366,7 @@ function createSqlite({ native, Buffer, platform = globalThis.process?.platform 
 			SQLITE_CHANGESET_CONSTRAINT: 4,
 			SQLITE_CHANGESET_FOREIGN_KEY: 5,
 		},
-		backup() {
-			throw sqliteError(
-				"sqlite.backup() is not available in the Graak SQLite build",
-				"ERR_FEATURE_UNAVAILABLE_ON_PLATFORM"
-			);
-		},
+		backup,
 		version: native.sqliteVersion(),
 	};
 

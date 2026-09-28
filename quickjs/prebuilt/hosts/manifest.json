@@ -1,35 +1,35 @@
 {
-	"sourceHash": "daaba85e2c0a725796bc8cb2cc56c76bfdbb3924b5207d0c6b2f737fce44dbad",
+	"sourceHash": "56b95be9ac960d1c2407240d8b587455f332878a133703a4e4ae6e41050d185f",
 	"hosts": {
 		"linux-x64-glibc": {
 			"file": "linux-x64-glibc.gz",
-			"sha256": "3cf536206310ee0025d7d471a684b87d3ee01bbdc07d7c231664558866075cef",
-			"size": 6097472
-		},
-		"linux-x64-musl-dyn": {
-			"file": "linux-x64-musl-dyn.gz",
-			"sha256": "4450bc8ebc549cffcedda024f97b6d94566803cac58f5adedbb6443c547cd171",
-			"size": 6070064
-		},
-		"win-x64": {
-			"file": "win-x64.gz",
-			"sha256": "f138a65f8db9309d201be67e036c1d48b41b639dd55c2d3aff53ea514175aeb1",
-			"size": 6138094
-		},
-		"win-x86": {
-			"file": "win-x86.gz",
-			"sha256": "b8e08c0c58dead666b4ffb47d7e518c3e85dc77337fb605389b4c29eb78fbe1a",
-			"size": 6204469
-		},
-		"win-xp-x86": {
-			"file": "win-xp-x86.gz",
-			"sha256": "907f99568a5936bb155fb25cfb975a7d430aeb459f0c9998e85d1cc90542f2e3",
-			"size": 6206505
+			"sha256": "60d7d91c4f72deb5d22704725e7d1e3a0265616dfd96b554753e7c56f5127298",
+			"size": 6101792
 		},
 		"linux-x64": {
 			"file": "linux-x64.gz",
-			"sha256": "6de7241824707fd9da22976cbc0747753aba37167e2cb9c10899f07ce2db9036",
-			"size": 5895120
+			"sha256": "ea6fc5a04d88e44f963abb85d524a520b4a9df3626d00e0598374b9dff7eeffa",
+			"size": 5895352
+		},
+		"linux-x64-musl-dyn": {
+			"file": "linux-x64-musl-dyn.gz",
+			"sha256": "17729b15bef40674c0fd588c863988e1be4e9db0651a8399ed477583b1f3bcfb",
+			"size": 6070288
+		},
+		"win-x64": {
+			"file": "win-x64.gz",
+			"sha256": "9d64e541f457392d6b1555a96c38a7d322bf74b923dfe9bce2d803a4c60e38f4",
+			"size": 6139321
+		},
+		"win-x86": {
+			"file": "win-x86.gz",
+			"sha256": "cad44fdf298a76bdf249a1621ef528ef2cdf6d6cace6d67aa2b2bd0290e34ca7",
+			"size": 6206212
+		},
+		"win-xp-x86": {
+			"file": "win-xp-x86.gz",
+			"sha256": "21d5b797de3093e7924dd122245e7b927ae1803f24224bd0ad3a8327593c262f",
+			"size": 6208248
 		}
 	}
 }

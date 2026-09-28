@@ -22,10 +22,16 @@
 
 #define FG_MAX_DBS 64
 #define FG_MAX_STMTS 4096
+#define FG_MAX_BACKUPS 16
 
 static sqlite3 *fg_dbs[FG_MAX_DBS];
 static sqlite3_stmt *fg_stmts[FG_MAX_STMTS];
 static int fg_stmt_db[FG_MAX_STMTS];
+
+/* sqlite3_backup* handles for node:sqlite's backup(), keyed the same way as fg_dbs/fg_stmts. fg_backup_dest is the
+   destination connection sqlite3_backup_init() opened, closed alongside it when the backup ends. */
+static sqlite3_backup *fg_backups[FG_MAX_BACKUPS];
+static sqlite3 *fg_backup_dest[FG_MAX_BACKUPS];
 
 static JSValue fg_sqlite_throw(JSContext *ctx, sqlite3 *db, int code, const char *fallback)
 {
@@ -452,6 +458,135 @@ static JSValue fg_sqlite_version(JSContext *ctx, JSValueConst this_val, int argc
     return JS_NewString(ctx, sqlite3_libversion());
 }
 
+/* Closes and forgets backup slot `id`, the way node:sqlite's BackupJob::Cleanup() does: finish the backup, then
+   close the destination connection it opened. Safe to call on an id that is already closed. */
+static void fg_backup_cleanup(int id)
+{
+    if (id < 0 || id >= FG_MAX_BACKUPS || !fg_backups[id]) {
+        return;
+    }
+    sqlite3_backup_finish(fg_backups[id]);
+    fg_backups[id] = NULL;
+    sqlite3_close_v2(fg_backup_dest[id]);
+    fg_backup_dest[id] = NULL;
+}
+
+/* sqliteBackupInit(srcDb, srcName, destPath, destName) -> backup id. Opens destPath as a fresh connection (created if
+   missing, like node:sqlite's backup()) and starts a backup into it from srcDb's srcName schema. */
+static JSValue fg_sqlite_backup_init(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    sqlite3 *src = fg_db_get(ctx, argv[0]);
+    const char *src_name, *dest_path, *dest_name;
+    sqlite3 *dest = NULL;
+    sqlite3_backup *b;
+    int rc, id;
+
+    if (!src) {
+        return JS_EXCEPTION;
+    }
+    src_name = JS_ToCString(ctx, argv[1]);
+    dest_path = JS_ToCString(ctx, argv[2]);
+    dest_name = JS_ToCString(ctx, argv[3]);
+    if (!src_name || !dest_path || !dest_name) {
+        JS_FreeCString(ctx, src_name);
+        JS_FreeCString(ctx, dest_path);
+        JS_FreeCString(ctx, dest_name);
+        return JS_EXCEPTION;
+    }
+    for (id = 0; id < FG_MAX_BACKUPS; id++) {
+        if (!fg_backups[id]) {
+            break;
+        }
+    }
+    if (id == FG_MAX_BACKUPS) {
+        JS_FreeCString(ctx, src_name);
+        JS_FreeCString(ctx, dest_path);
+        JS_FreeCString(ctx, dest_name);
+        return JS_ThrowInternalError(ctx, "too many open backups (limit is %d)", FG_MAX_BACKUPS);
+    }
+    rc = sqlite3_open_v2(dest_path, &dest, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, NULL);
+    JS_FreeCString(ctx, dest_path);
+    if (rc != SQLITE_OK) {
+        JSValue err = dest ? fg_sqlite_throw(ctx, dest, sqlite3_extended_errcode(dest), NULL)
+                            : fg_sqlite_throw(ctx, NULL, rc, sqlite3_errstr(rc));
+        if (dest) {
+            sqlite3_close_v2(dest);
+        }
+        JS_FreeCString(ctx, src_name);
+        JS_FreeCString(ctx, dest_name);
+        return err;
+    }
+    b = sqlite3_backup_init(dest, dest_name, src, src_name);
+    JS_FreeCString(ctx, src_name);
+    JS_FreeCString(ctx, dest_name);
+    if (!b) {
+        JSValue err = fg_sqlite_throw(ctx, dest, sqlite3_extended_errcode(dest), NULL);
+        sqlite3_close_v2(dest);
+        return err;
+    }
+    fg_backups[id] = b;
+    fg_backup_dest[id] = dest;
+    return JS_NewInt32(ctx, id);
+}
+
+/* sqliteBackupStep(id, nPages) -> [done, totalPages, remainingPages]. Mirrors node:sqlite's BackupJob step-and-check:
+   an error other than OK/DONE/BUSY/LOCKED throws and closes the backup; reaching zero remaining pages with SQLITE_DONE
+   closes it and reports done; otherwise it reports progress and stays open for the next step. */
+static JSValue fg_sqlite_backup_step(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    int32_t id, pages;
+    sqlite3_backup *b;
+    int rc, total, remaining;
+    JSValue arr;
+
+    if (JS_ToInt32(ctx, &id, argv[0]) || JS_ToInt32(ctx, &pages, argv[1])) {
+        return JS_EXCEPTION;
+    }
+    if (id < 0 || id >= FG_MAX_BACKUPS || !fg_backups[id]) {
+        return JS_ThrowInternalError(ctx, "backup is not open");
+    }
+    b = fg_backups[id];
+    rc = sqlite3_backup_step(b, pages);
+    if (!(rc == SQLITE_OK || rc == SQLITE_DONE || rc == SQLITE_BUSY || rc == SQLITE_LOCKED)) {
+        JSValue err = fg_sqlite_throw(ctx, NULL, rc, sqlite3_errstr(rc));
+        fg_backup_cleanup(id);
+        return err;
+    }
+    total = sqlite3_backup_pagecount(b);
+    remaining = sqlite3_backup_remaining(b);
+    if (remaining != 0) {
+        arr = JS_NewArray(ctx);
+        JS_SetPropertyUint32(ctx, arr, 0, JS_FALSE);
+        JS_SetPropertyUint32(ctx, arr, 1, JS_NewInt32(ctx, total));
+        JS_SetPropertyUint32(ctx, arr, 2, JS_NewInt32(ctx, remaining));
+        return arr;
+    }
+    if (rc != SQLITE_DONE) {
+        JSValue err = fg_sqlite_throw(ctx, fg_backup_dest[id], sqlite3_extended_errcode(fg_backup_dest[id]), NULL);
+        fg_backup_cleanup(id);
+        return err;
+    }
+    fg_backup_cleanup(id);
+    arr = JS_NewArray(ctx);
+    JS_SetPropertyUint32(ctx, arr, 0, JS_TRUE);
+    JS_SetPropertyUint32(ctx, arr, 1, JS_NewInt32(ctx, total));
+    JS_SetPropertyUint32(ctx, arr, 2, JS_NewInt32(ctx, 0));
+    return arr;
+}
+
+/* sqliteBackupFinish(id): closes a backup that will not be stepped to completion, e.g. because a `progress` callback
+   threw. A no-op on an id already closed by sqliteBackupStep finishing or failing. */
+static JSValue fg_sqlite_backup_finish(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    int32_t id;
+
+    if (JS_ToInt32(ctx, &id, argv[0])) {
+        return JS_EXCEPTION;
+    }
+    fg_backup_cleanup(id);
+    return JS_UNDEFINED;
+}
+
 const JSCFunctionListEntry graak_sqlite_funcs[] = {
     JS_CFUNC_DEF("sqliteOpen", 2, fg_sqlite_open),
     JS_CFUNC_DEF("sqliteClose", 1, fg_sqlite_close),
@@ -467,5 +602,8 @@ const JSCFunctionListEntry graak_sqlite_funcs[] = {
     JS_CFUNC_DEF("sqliteInfo", 1, fg_sqlite_info),
     JS_CFUNC_DEF("sqliteSql", 2, fg_sqlite_sql),
     JS_CFUNC_DEF("sqliteVersion", 0, fg_sqlite_version),
+    JS_CFUNC_DEF("sqliteBackupInit", 4, fg_sqlite_backup_init),
+    JS_CFUNC_DEF("sqliteBackupStep", 2, fg_sqlite_backup_step),
+    JS_CFUNC_DEF("sqliteBackupFinish", 1, fg_sqlite_backup_finish),
 };
 const size_t graak_sqlite_funcs_count = sizeof(graak_sqlite_funcs) / sizeof(graak_sqlite_funcs[0]);
