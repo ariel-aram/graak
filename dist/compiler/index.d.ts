@@ -21,6 +21,8 @@ export * from "./SeaPayload";
 export * from "./SpawnOutput";
 export * from "./StaticSite";
 export * from "./V8AddonBuilder";
+export * from "./WasmModuleInfo";
+export * from "./WasmShimGenerator";
 export * from "./Win7Compat";
 export * from "./YarnPnpCompat";
 //# sourceMappingURL=index.d.ts.map

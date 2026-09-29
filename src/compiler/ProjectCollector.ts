@@ -3,6 +3,7 @@ import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } 
 import { PathOutsideRootError, ProjectError } from "../structures";
 import type { ArchiveEntry } from "./Archive";
 import { type BinaryInfo, BinaryInspector } from "./BinaryInspector";
+import { generateWasmShim } from "./WasmShimGenerator";
 
 export interface CollectOptions {
 	entrypoint: string;
@@ -212,6 +213,23 @@ export class ProjectCollector {
 			];
 			if (depNames.some((n) => nativeAddonPackageNames.has(n))) continue;
 			sourceOnlyAddons.push({ archiveDir, sourceDir: dirname(gyp.abs), name: basename(archiveDir) });
+		}
+		// A ready-made binding for every ".wasm" the project ships: a module compiled from Rust, Zig, C or anything
+		// else that targets wasm32 needs no hand-written loader -- its own export table says what to expose. Skipped
+		// when the project already has its own "<file>.wasm.js" (a hand-written loader takes precedence) or the
+		// module imports something besides WASI (an arbitrary "env" object nothing here can supply on its own).
+		const existingDests = new Set(collector.entries.map((e) => e.path));
+		for (const entry of [...collector.entries]) {
+			if (!entry.path.endsWith(".wasm") || typeof entry.source !== "string") continue;
+			const shimPath = `${entry.path}.js`;
+			if (existingDests.has(shimPath)) continue;
+			let shim: string | null;
+			try {
+				shim = generateWasmShim(readFileSync(entry.source), basename(entry.path));
+			} catch {
+				continue; // not a well-formed module, or a section shape this reader does not follow: ship the .wasm alone
+			}
+			if (shim) collector.entries.push({ path: shimPath, source: Buffer.from(shim, "utf-8"), mode: entry.mode });
 		}
 		return {
 			root,

@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+const node_fs_1 = require("node:fs");
+const node_path_1 = require("node:path");
 const node_util_1 = require("node:util");
 const BinaryInspector_1 = require("./compiler/BinaryInspector");
 const BinaryPackager_1 = require("./compiler/BinaryPackager");
@@ -8,6 +10,7 @@ const DenoProject_1 = require("./compiler/DenoProject");
 const PolicyEnforcer_1 = require("./compiler/PolicyEnforcer");
 const QuickJsPackager_1 = require("./compiler/QuickJsPackager");
 const RuntimeRegistry_1 = require("./compiler/RuntimeRegistry");
+const WasmShimGenerator_1 = require("./compiler/WasmShimGenerator");
 const ExtensionRegistry_1 = require("./integrations/ExtensionRegistry");
 const ForgeDBIntegration_1 = require("./integrations/ForgeDBIntegration");
 const TargetDevice_1 = require("./structures/TargetDevice");
@@ -20,6 +23,7 @@ Usage:
   graak info <target> [--db <driver>]
   graak extensions
   graak inspect <file>
+  graak wasm-shim <file.wasm> [-o out.js]
   graak runtimes list [--target <target>]
   graak runtimes add <target> <version> <url> --sha256 <hex> [--notes <text>] [--global]
   graak runtimes remove <target> <version> [--global]
@@ -201,6 +205,20 @@ async function main() {
             console.log(JSON.stringify(info, null, 2));
             const fits = TargetDevice_1.ALL_TARGETS.filter((t) => BinaryInspector_1.BinaryInspector.matchesTarget(info, t));
             console.log(`Runs on: ${fits.length ? fits.join(", ") : "no known target"}`);
+            return;
+        }
+        case "wasm-shim": {
+            if (!arg)
+                fail("Please provide a .wasm file");
+            const bytes = (0, node_fs_1.readFileSync)(arg);
+            const outPath = values.output ?? `${arg}.js`;
+            const shim = (0, WasmShimGenerator_1.generateWasmShim)(bytes, (0, node_path_1.basename)(arg));
+            if (!shim) {
+                fail(`'${arg}' imports something besides WASI (an arbitrary "env" object), so no shim can be generated ` +
+                    "automatically -- write the loader by hand and supply that import object yourself.");
+            }
+            (0, node_fs_1.writeFileSync)(outPath, shim);
+            console.log(`Wrote ${outPath}`);
             return;
         }
         case "runtimes": {

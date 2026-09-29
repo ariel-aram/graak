@@ -37,6 +37,8 @@ __exportStar(require("./SeaPayload"), exports);
 __exportStar(require("./SpawnOutput"), exports);
 __exportStar(require("./StaticSite"), exports);
 __exportStar(require("./V8AddonBuilder"), exports);
+__exportStar(require("./WasmModuleInfo"), exports);
+__exportStar(require("./WasmShimGenerator"), exports);
 __exportStar(require("./Win7Compat"), exports);
 __exportStar(require("./YarnPnpCompat"), exports);
 //# sourceMappingURL=index.js.map

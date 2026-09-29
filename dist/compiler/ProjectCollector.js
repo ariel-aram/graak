@@ -9,6 +9,7 @@ const node_fs_1 = require("node:fs");
 const node_path_1 = require("node:path");
 const structures_1 = require("../structures");
 const BinaryInspector_1 = require("./BinaryInspector");
+const WasmShimGenerator_1 = require("./WasmShimGenerator");
 const ALWAYS_EXCLUDED_NAMES = new Set([
     ".git",
     ".hg",
@@ -162,6 +163,27 @@ class ProjectCollector {
             if (depNames.some((n) => nativeAddonPackageNames.has(n)))
                 continue;
             sourceOnlyAddons.push({ archiveDir, sourceDir: (0, node_path_1.dirname)(gyp.abs), name: (0, node_path_1.basename)(archiveDir) });
+        }
+        // A ready-made binding for every ".wasm" the project ships: a module compiled from Rust, Zig, C or anything
+        // else that targets wasm32 needs no hand-written loader -- its own export table says what to expose. Skipped
+        // when the project already has its own "<file>.wasm.js" (a hand-written loader takes precedence) or the
+        // module imports something besides WASI (an arbitrary "env" object nothing here can supply on its own).
+        const existingDests = new Set(collector.entries.map((e) => e.path));
+        for (const entry of [...collector.entries]) {
+            if (!entry.path.endsWith(".wasm") || typeof entry.source !== "string")
+                continue;
+            const shimPath = `${entry.path}.js`;
+            if (existingDests.has(shimPath))
+                continue;
+            let shim;
+            try {
+                shim = (0, WasmShimGenerator_1.generateWasmShim)((0, node_fs_1.readFileSync)(entry.source), (0, node_path_1.basename)(entry.path));
+            }
+            catch {
+                continue; // not a well-formed module, or a section shape this reader does not follow: ship the .wasm alone
+            }
+            if (shim)
+                collector.entries.push({ path: shimPath, source: Buffer.from(shim, "utf-8"), mode: entry.mode });
         }
         return {
             root,

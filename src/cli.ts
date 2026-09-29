@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { readFileSync, writeFileSync } from "node:fs";
+import { basename } from "node:path";
 import { parseArgs } from "node:util";
 import { BinaryInspector } from "./compiler/BinaryInspector";
 import { BinaryPackager, type BuildEngine, type BuildStrategy } from "./compiler/BinaryPackager";
@@ -6,6 +8,7 @@ import { DENO_COMPILE_TARGETS, DenoProject } from "./compiler/DenoProject";
 import { PolicyEnforcer } from "./compiler/PolicyEnforcer";
 import { QuickJsPackager } from "./compiler/QuickJsPackager";
 import { RuntimeRegistry } from "./compiler/RuntimeRegistry";
+import { generateWasmShim } from "./compiler/WasmShimGenerator";
 import { ExtensionRegistry } from "./integrations/ExtensionRegistry";
 import { FORGEDB_DRIVERS, type ForgeDBDriver, ForgeDBIntegration } from "./integrations/ForgeDBIntegration";
 import { ALL_TARGETS, getTargetMetadata, parseTargetDevice, TARGET_METADATA_MAP } from "./structures/TargetDevice";
@@ -20,6 +23,7 @@ Usage:
   graak info <target> [--db <driver>]
   graak extensions
   graak inspect <file>
+  graak wasm-shim <file.wasm> [-o out.js]
   graak runtimes list [--target <target>]
   graak runtimes add <target> <version> <url> --sha256 <hex> [--notes <text>] [--global]
   graak runtimes remove <target> <version> [--global]
@@ -214,6 +218,22 @@ async function main(): Promise<void> {
 			console.log(JSON.stringify(info, null, 2));
 			const fits = ALL_TARGETS.filter((t) => BinaryInspector.matchesTarget(info, t));
 			console.log(`Runs on: ${fits.length ? fits.join(", ") : "no known target"}`);
+			return;
+		}
+
+		case "wasm-shim": {
+			if (!arg) fail("Please provide a .wasm file");
+			const bytes = readFileSync(arg);
+			const outPath = (values.output as string | undefined) ?? `${arg}.js`;
+			const shim = generateWasmShim(bytes, basename(arg));
+			if (!shim) {
+				fail(
+					`'${arg}' imports something besides WASI (an arbitrary "env" object), so no shim can be generated ` +
+						"automatically -- write the loader by hand and supply that import object yourself."
+				);
+			}
+			writeFileSync(outPath, shim as string);
+			console.log(`Wrote ${outPath}`);
 			return;
 		}
 
