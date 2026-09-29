@@ -382,10 +382,14 @@ Embedded databases come in three kinds, and all three run:
 - **Databases you connect to** (Postgres, MySQL, MongoDB, Redis, a SurrealDB server) are clients over `net`, `tls`, `crypto` and, for
   SurrealDB's remote protocol, the global `WebSocket`.
 
-`rocksdb-native` and its relatives call libuv directly, next to Node-API. The host therefore exports the part of libuv's ABI they
+`rocksdb-native` and its relatives call libuv directly, next to Node-API. On Linux the host exports the part of libuv's ABI they
 use, laid out by libuv's own headers: `uv_queue_work`, `uv_fs_open/close/read/write/mkdir/req_cleanup`, `uv_buf_init`,
-`uv_err_name`, `uv_strerror`. Work runs on OS threads and completes on the JavaScript thread. Another addon that needs more of libuv
-(handles, timers, sockets) fails to bind, naming what it lacks. This subset exists on Linux; a Windows host does not export it yet.
+`uv_err_name`, `uv_strerror`. Work runs on OS threads and completes on the JavaScript thread. On the Windows hosts the exported
+subset is broader still: the default loop (`uv_run`, `uv_stop`, `uv_now`, ...), handles, timers, `uv_async`/`uv_idle`/`uv_prepare`/
+`uv_check`, `uv_queue_work` on a four-thread pool, the same fs basics, the thread and lock primitives (`uv_mutex_*`, `uv_rwlock_*`,
+`uv_cond_*`, `uv_sem_*`, `uv_thread_*`, `uv_key_*`, `uv_once`), and the system and error helpers, all written against Win32 calls
+Windows XP already has. Not provided on either platform: sockets, pipes, TTYs, processes, signals and fs events -- another addon
+that needs one of those fails to bind, naming what it lacks.
 
 ### Native addons (Node-API)
 
