@@ -128,6 +128,16 @@ classic DSA (both reject it) and ECDSA (Node signs and verifies with it like any
 digest is computed in JavaScript and handed to mbedTLS as already-hashed bytes, since mbedTLS's own digest table has no
 BLAKE2 entry to compute it from the name).
 
+**Pending prebuilt rebuild, not a code gap:** the ECDSA BLAKE2 fix and `backup()` above changed `quickjs/native`, and
+every target except `linux-x86` and `linux-x86-musl-dyn` (32-bit Linux and iSH) has been rebuilt to match; those two
+still carry the pre-change binaries because building them needs an `i686-linux-musl-cross` toolchain from musl.cc,
+and musl.cc itself is denied by the same egress policy that blocks `www.sqlite.org` above (confirmed again on
+2026-09-29: `CONNECT tunnel failed, response 403`). The two targets still run, just without the ECDSA BLAKE2 and
+`backup()` changes until `bun run prebuilts linux-x86 linux-x86-musl-dyn` runs on a machine that can reach musl.cc
+or already has the toolchain on `PATH` -- it will merge cleanly since the source hash already matches. Until then,
+`every native host has a prebuilt copy built from the sources on disk` and the two tests that build and run those
+targets for real fail in any environment without that toolchain, which is expected, not a regression.
+
 What is genuinely still absent, not just narrowed: `node:sqlite` user-defined functions and extensions (`backup()` is
 implemented: rate-limited `sqlite3_backup_step` stepping driven from JavaScript, with `progress`, `source`/`target` and
 Node's own validation and error shapes, so no C-callback-into-JS bridging was needed; `function()`, the scalar
