@@ -103,6 +103,55 @@ static struct {
     size_t cached, budget;
 } sea;
 
+/*
+ * `node:test`'s `mock.module()` for ESM: a JS callback registered once from node-compat.js (native.setEsmMockHook),
+ * called synchronously from fg_sea_module_loader with the specifier the engine is about to load. It returns either
+ * `undefined` (no mock; load the real module) or a fully-formed ES module source string, which is compiled and
+ * installed exactly like a payload file below. The callback owns all matching logic (Node's specifier-resolution
+ * semantics, building the export list); this file only calls it and compiles what it hands back.
+ *
+ * The hook is tracked with a plain flag rather than a `JSValue` initialized to `JS_UNDEFINED`: a static JSValue
+ * initializer is not a constant expression on every target's compiler (the NaN-boxed and split-union JSValue
+ * layouts differ in whether that counts as a compound literal), so `fg_sea_mock_hook` starts uninitialized and
+ * `fg_sea_mock_hook_set` says whether it holds a live value yet.
+ */
+static JSContext *fg_sea_mock_ctx = NULL;
+static JSValue fg_sea_mock_hook;
+static int fg_sea_mock_hook_set = 0;
+
+static JSValue fg_sea_js_set_esm_mock_hook(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    (void) this_val;
+    if (fg_sea_mock_hook_set) {
+        JS_FreeValue(fg_sea_mock_ctx, fg_sea_mock_hook);
+    }
+    if (argc > 0 && JS_IsFunction(ctx, argv[0])) {
+        fg_sea_mock_hook = JS_DupValue(ctx, argv[0]);
+        fg_sea_mock_hook_set = 1;
+    } else {
+        fg_sea_mock_hook_set = 0;
+    }
+    fg_sea_mock_ctx = ctx;
+    return JS_UNDEFINED;
+}
+
+/* Compiles an already-loaded module source into a JSModuleDef, the same way for a payload file and a synthesized mock. */
+static JSModuleDef *fg_sea_compile_module(JSContext *ctx, const char *src, size_t len, const char *name)
+{
+    JSValue val = JS_Eval(ctx, src, len, name, JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
+    JSModuleDef *m;
+    if (JS_IsException(val)) {
+        return NULL;
+    }
+    if (js_module_set_import_meta(ctx, val, false, false) < 0) {
+        JS_FreeValue(ctx, val);
+        return NULL;
+    }
+    m = (JSModuleDef *) JS_VALUE_GET_PTR(val);
+    JS_FreeValue(ctx, val);
+    return m;
+}
+
 static uint64_t fg_le64(const unsigned char *p)
 {
     uint64_t v = 0;
@@ -514,15 +563,35 @@ static uint8_t *fg_sea_load_file(JSContext *ctx, size_t *len, const char *path)
 }
 
 /*
- * The module loader: an import of a file inside the payload is compiled from memory; anything else goes to the
- * engine's own loader. import.meta.url is the payload path, which is what the program sees as its location.
+ * The module loader: a mocked specifier (node:test's mock.module(), ESM side) is synthesized from JS-supplied
+ * source; an import of a file inside the payload is compiled from memory; anything else goes to the engine's own
+ * loader. import.meta.url is the payload path, which is what the program sees as its location.
  */
 JSModuleDef *fg_sea_module_loader(JSContext *ctx, const char *name, void *opaque, JSValueConst attributes)
 {
     fg_sea_entry *e = NULL;
     size_t name_len = strlen(name);
-    JSValue val;
-    JSModuleDef *m;
+
+    if (fg_sea_mock_hook_set) {
+        JSValue specifier = JS_NewString(ctx, name);
+        JSValue mocked = JS_Call(ctx, fg_sea_mock_hook, JS_UNDEFINED, 1, &specifier);
+        JS_FreeValue(ctx, specifier);
+        if (JS_IsException(mocked)) {
+            return NULL;
+        }
+        if (!JS_IsUndefined(mocked)) {
+            size_t src_len = 0;
+            const char *src = JS_ToCStringLen(ctx, &src_len, mocked);
+            JSModuleDef *m;
+            JS_FreeValue(ctx, mocked);
+            if (!src) {
+                return NULL;
+            }
+            m = fg_sea_compile_module(ctx, src, src_len, name);
+            JS_FreeCString(ctx, src);
+            return m;
+        }
+    }
 
     if (!sea.active || !fg_sea_file(name, name_len, &e)) {
         return js_module_loader(ctx, name, opaque, attributes);
@@ -542,24 +611,15 @@ JSModuleDef *fg_sea_module_loader(JSContext *ctx, const char *name, void *opaque
     {
         size_t len = 0;
         uint8_t *buf = fg_sea_load_file(ctx, &len, name);
+        JSModuleDef *m;
         if (!buf) {
             JS_ThrowReferenceError(ctx, "could not load module filename '%s'", name);
             return NULL;
         }
-        val = JS_Eval(ctx, (const char *) buf, len, name, JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
+        m = fg_sea_compile_module(ctx, (const char *) buf, len, name);
         js_free(ctx, buf);
+        return m;
     }
-    if (JS_IsException(val)) {
-        return NULL;
-    }
-    /* No realpath: the file exists only in the payload. */
-    if (js_module_set_import_meta(ctx, val, false, false) < 0) {
-        JS_FreeValue(ctx, val);
-        return NULL;
-    }
-    m = (JSModuleDef *) JS_VALUE_GET_PTR(val);
-    JS_FreeValue(ctx, val);
-    return m;
 }
 
 /* -------------------------------------------------------------------------------------- extraction */
@@ -806,10 +866,16 @@ static const JSCFunctionListEntry fg_sea_funcs[] = {
     JS_CFUNC_DEF("release", 0, fg_sea_js_release),
 };
 
-/* Adds `sea` to the native layer when this executable runs its own payload. */
+static const JSCFunctionListEntry fg_sea_mock_funcs[] = {
+    JS_CFUNC_DEF("setEsmMockHook", 1, fg_sea_js_set_esm_mock_hook),
+};
+
+/* Adds `sea` to the native layer when this executable runs its own payload; `setEsmMockHook` runs in every build,
+   SEA or not, since fg_sea_module_loader is the only module loader installed (see fg_main.c). */
 void fg_sea_install(JSContext *ctx, JSValueConst native)
 {
     JSValue obj;
+    JS_SetPropertyFunctionList(ctx, native, fg_sea_mock_funcs, sizeof(fg_sea_mock_funcs) / sizeof(fg_sea_mock_funcs[0]));
     if (!sea.active) {
         return;
     }

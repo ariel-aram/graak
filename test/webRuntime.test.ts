@@ -86,7 +86,19 @@ const DIFFERENTIAL: Array<[string, string[]]> = [
 	["repl-corpus.cjs", []],
 	["inspector-corpus.cjs", []],
 	["mock-module-corpus.cjs", ["mock-module-target.cjs"]],
+	[
+		"mock-module-esm-corpus.mjs",
+		[
+			"mock-module-esm-target-named.mjs",
+			"mock-module-esm-target-default.mjs",
+			"mock-module-esm-target-both.mjs",
+			"mock-module-esm-target-deprecated.mjs",
+			"mock-module-esm-target-empty.mjs",
+		],
+	],
 ];
+
+const MODULE_MOCK_FIXTURES = new Set(["mock-module-corpus.cjs", "mock-module-esm-corpus.mjs"]);
 
 // The Intl corpora print dates in the machine's zone and use its default locale: pin both, for Node.js and the host alike.
 const PINNED_ENV: NodeJS.ProcessEnv = {
@@ -117,11 +129,10 @@ for (const [fixture, extra] of DIFFERENTIAL) {
 		// `mock.module()` needs Node's own flag; Node refuses it in NODE_OPTIONS, so it goes on argv for Node. The
 		// engine has no such CLI flag parsing of its own and only ever reads it from NODE_OPTIONS (`execArgv` is
 		// always empty there), so the host gets it that way instead.
-		const nodeArgs = fixture === "mock-module-corpus.cjs" ? ["--experimental-test-module-mocks"] : [];
-		const hostEnv =
-			fixture === "mock-module-corpus.cjs"
-				? { ...PINNED_ENV, NODE_OPTIONS: "--experimental-test-module-mocks" }
-				: PINNED_ENV;
+		const nodeArgs = MODULE_MOCK_FIXTURES.has(fixture) ? ["--experimental-test-module-mocks"] : [];
+		const hostEnv = MODULE_MOCK_FIXTURES.has(fixture)
+			? { ...PINNED_ENV, NODE_OPTIONS: "--experimental-test-module-mocks" }
+			: PINNED_ENV;
 		const onNode = spawnSync(process.execPath, [...nodeArgs, join(root, fixture)], {
 			encoding: "utf-8",
 			timeout: 120_000,

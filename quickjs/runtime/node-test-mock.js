@@ -7,9 +7,39 @@
  * `--experimental-test-module-mocks` (checked against real Node 24.21.0 and 26.9.0 — the flag gates CommonJS
  * `require()` mocking too, not just ESM, despite the flag's name). Once enabled, it hooks the CommonJS `require()`
  * path the runtime already has (`node-compat.js`'s module-mock registry, threaded in as `mockCommonJsModule` /
- * `unmockCommonJsModule` / `resolveCommonJsModule`). ESM's `import` / `import()` go through the quickjs engine's own
- * native module loader (`fg_sea_module_loader` in `quickjs/native/fg_sea.c`), which no JS-only hook can intercept,
- * so mocking an ES module stays unavailable here even with the flag — a native-loader gap, not a missed option.
+ * `unmockCommonJsModule` / `resolveCommonJsModule`) for both sides of ESM mocking, because of how a packaged
+ * program actually runs `import`/`import()`:
+ *
+ * - Every project file the packager ships — `.mjs` included — is compiled to CommonJS by its own esbuild pass
+ *   before it ever reaches this engine (LegacyTranspiler.toCommonJs), and a dynamic `import()` becomes
+ *   `require()` wrapped in esbuild's own `__toESM()` helper. That helper reads one thing on the required value —
+ *   a non-enumerable `__esModule: true` marker esbuild's ESM-to-CJS conversion always sets — to tell an ESM file's
+ *   `require()` result apart from a plain CommonJS one: with the marker, `default` and the named exports stay
+ *   separate (real ESM shape); without it, `import()` synthesizes a CommonJS-style default the way importing a
+ *   genuine `.cjs` file does. `module()` below matches this: a specifier resolving to `.mjs`/`.mts` is mocked with
+ *   `buildEsmShapedMockExports` (the marker set, default and named kept apart); everything else (a builtin, a
+ *   `.cjs`/`.js` file) keeps `buildCommonJsMockExports`, exactly as before this change — required directly, an
+ *   ESM-shaped mock would print differently than Node's own `require()` of a CommonJS module does, so which
+ *   builder runs has to depend on the specifier, not be one shared shape for both.
+ * - fg_sea_module_loader (quickjs/native/fg_sea.c) is the engine's own module loader — installed once, for every
+ *   build, not only a single-file one — and it now also calls back into JS for every import it is asked to
+ *   resolve (`mockEsmModule` / `unmockEsmModule`, also in node-compat.js, keyed the same way the CommonJS side is:
+ *   off `resolveCommonJsModule`'s resolution, since a relative ESM specifier resolves to the identical on-disk
+ *   path `require()` would use). This is exercised by a real native ES module import — this runtime's own
+ *   `quickjs/runtime/*.js` files import each other exactly that way, checked in mock-module-esm-corpus.mjs's own
+ *   package (a builtin can be mocked bare or with a `node:` prefix through it too) — but a *packaged program's*
+ *   own `import()` calls, per the esbuild step above, do not currently reach it; that only changes if a future
+ *   build path stops converting user ESM to CommonJS before running it.
+ *
+ * Two gaps remain on the native-loader side, both verified against real Node 24.21.0/26.9.0 and both rooted in the
+ * same cause: quickjs (like the spec) caches a loaded module by its resolved specifier at the engine level
+ * (`ctx->loaded_modules`, internal to quickjs.c and not exposed to `fg_sea_module_loader`), consulted *before* the
+ * loader is ever called, and nothing here can evict an entry from it once populated. (1) `cache: false` behaves
+ * like `cache: true`: a second `import()` of the same specifier never reaches the mock hook again to hand back a
+ * fresh module instance, where real Node's own loader mints a distinct module identity per call. (2) Mocking a
+ * specifier some earlier `import`/`import()` already resolved has no effect (it still returns the real,
+ * already-cached module), where real Node's loader can retroactively swap it. Calling `mock.module()` before the
+ * first import of a specifier — the normal pattern, and the one every case here uses — is unaffected by either.
  */
 
 import {
@@ -75,6 +105,23 @@ function buildCommonJsMockExports({ hasDefault, defaultExport, namedExports }) {
 	if (hasDefault && (defaultExport === null || typeof defaultExport !== "object") && !namedExports) return defaultExport;
 	const result = {};
 	if (hasDefault && defaultExport !== null && typeof defaultExport === "object") Object.assign(result, defaultExport);
+	if (namedExports) for (const key of Object.keys(namedExports)) if (key !== "default") result[key] = namedExports[key];
+	return result;
+}
+
+/*
+ * The ESM shape of a mock, for a specifier that resolves to a `.mjs`/`.mts` file: `default` and the named exports
+ * stay separate, as real ESM keeps them, with a non-enumerable `__esModule: true` marker. This is what the
+ * packager's own esbuild conversion of a real `.mjs` file produces on `require()` -- every project file (`.mjs`
+ * included) is compiled to CommonJS before it runs on this engine, and a dynamic `import()` becomes
+ * `require()` wrapped in esbuild's `__toESM()` helper, which reads exactly this marker to decide whether to keep a
+ * module's shape (this branch) or synthesize a CommonJS-style default (`buildCommonJsMockExports`, used for
+ * everything else: builtins and `.cjs`/`.js` files, matching plain `require()`'s own interop-free behavior).
+ */
+function buildEsmShapedMockExports({ hasDefault, defaultExport, namedExports }) {
+	const result = {};
+	Object.defineProperty(result, "__esModule", { value: true, enumerable: false, configurable: true, writable: true });
+	if (hasDefault) result.default = defaultExport;
 	if (namedExports) for (const key of Object.keys(namedExports)) if (key !== "default") result[key] = namedExports[key];
 	return result;
 }
@@ -249,6 +296,8 @@ function createMockTools(env) {
 		resolveCommonJsModule,
 		mockCommonJsModule,
 		unmockCommonJsModule,
+		mockEsmModule,
+		unmockEsmModule,
 	} = env;
 
 	/* ------------------------------------------------------------------------------------------------ mock timers */
@@ -785,10 +834,24 @@ function createMockTools(env) {
 			const resolved = resolveCommonJsModule(specifier, fromDir);
 			const moduleId = resolved.builtin ? `builtin:${resolved.builtin}` : resolved.file;
 
-			const build = () => buildCommonJsMockExports({ hasDefault, defaultExport: defaultValue, namedExports: named });
+			// A mocked `.mjs`/`.mts` file is required the ESM-shaped way (see buildEsmShapedMockExports); anything
+			// else -- a builtin, or a plain `.cjs`/`.js` file -- keeps require()'s own CommonJS interop.
+			const isEsmFile = !resolved.builtin && /\.(mjs|mts)$/i.test(resolved.file);
+			const buildExports = isEsmFile ? buildEsmShapedMockExports : buildCommonJsMockExports;
+			const build = () => buildExports({ hasDefault, defaultExport: defaultValue, namedExports: named });
 			mockCommonJsModule(moduleId, build, cache);
 
-			const ctx = new MockModuleContext(() => unmockCommonJsModule(moduleId));
+			// The ESM side: every specifier text the mocked module could be imported by. A relative or absolute
+			// specifier resolves to one on-disk path either way; a builtin can be spelled bare or with "node:".
+			const esmIds = resolved.builtin
+				? [...new Set([specifier, resolved.builtin, `node:${resolved.builtin}`])]
+				: [resolved.file];
+			const esmMockId = mockEsmModule?.(esmIds, hasDefault, defaultValue, named);
+
+			const ctx = new MockModuleContext(() => {
+				unmockCommonJsModule(moduleId);
+				unmockEsmModule?.(esmIds, esmMockId);
+			});
 			this.#mocks.push({ __proto__: null, ctx, restore: restoreModule });
 			return ctx;
 		}

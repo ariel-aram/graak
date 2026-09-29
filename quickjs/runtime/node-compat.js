@@ -2182,6 +2182,8 @@ const SCHEME_ONLY = new Set(["test", "test/reporters"]);
 			moduleCache,
 			mockCommonJsModule,
 			unmockCommonJsModule,
+			mockEsmModule,
+			unmockEsmModule,
 		}));
 	let wasiModule;
 	Object.defineProperty(builtins, "wasi", {
@@ -2269,6 +2271,72 @@ function unmockCommonJsModule(id) {
 	if (!mocked) return;
 	if (mocked.hadPrevious) moduleCache.set(id, mocked.previous);
 	else moduleCache.delete(id);
+}
+
+/*
+ * `node:test`'s `mock.module()` for the ESM side. `import` / `import()` go through the engine's own native module
+ * loader (`fg_sea_module_loader` in quickjs/native/fg_sea.c), which is the only loader installed
+ * (`JS_SetModuleLoaderFunc2` in fg_main.c) and runs for every import in every build, SEA or not. That C loader
+ * calls `esmMockHook` below, synchronously, with the specifier it is about to load (already normalized the way
+ * the engine normalizes a relative specifier -- see `js_default_module_normalize_name` in quickjs.c: leading "./"
+ * and "../" segments resolved against the importing module's own name, everything else left untouched). A
+ * registry hit here is a ready-made ES module source string; `fg_sea_module_loader` compiles it through the exact
+ * same `JS_Eval(..., JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY)` path it uses for a real file, instead of
+ * loading one. `esmModuleMockRegistry` is keyed the same way `moduleMockRegistry` is for CommonJS (an absolute
+ * file path for a relative specifier, the literal specifier text for a builtin), computed in node-test-mock.js
+ * from the very same `resolveCommonJsModule` result mock.module() already resolves the CommonJS side with, since
+ * a relative ESM specifier resolves to the identical on-disk path (ESM specifiers carry an explicit extension, so
+ * `resolvePackage` returns it unchanged) and the engine's own normalizer performs the same lexical dir-join.
+ *
+ * Values handed to mock.module() are not JSON-safe in general (functions, objects with methods, ...), so the
+ * synthesized source cannot embed them literally. Each mock gets a numeric id in `esmMockValues`; the source
+ * fetches its own entry through a hidden global at evaluation time and re-exports it under a plain `export const
+ * <key> = ...` per named export -- checked against real Node 24.21.0/26.9.0, whose own mock.module() synthesizes
+ * ESM source the same naive way: an export key that is not a valid identifier is a real Node bug, not a gap to
+ * work around here, and throws a SyntaxError there too (an ES2022 "arbitrary module namespace identifier", `export
+ * { local as "string" }`, would dodge it, but that would make this stricter than Node rather than matching it).
+ */
+const esmModuleMockRegistry = new Map();
+const esmMockValues = new Map();
+let esmMockNextId = 0;
+
+function esmMockHook(name) {
+	return esmModuleMockRegistry.get(name);
+}
+
+const hasEsmMockHook = typeof globalThis.__graak_native?.setEsmMockHook === "function";
+if (hasEsmMockHook) {
+	Object.defineProperty(globalThis, "__graak_esm_mock_values__", {
+		value: (id) => esmMockValues.get(id),
+		enumerable: false,
+		configurable: true,
+		writable: false,
+	});
+	globalThis.__graak_native.setEsmMockHook(esmMockHook);
+}
+
+/** Installs (or replaces) an ESM module mock under every id it might be imported as; returns the mock's id. */
+function mockEsmModule(ids, hasDefault, defaultValue, named) {
+	if (!hasEsmMockHook) return undefined;
+	const id = esmMockNextId++;
+	esmMockValues.set(id, { defaultValue, named });
+	let source = `const __m = globalThis.__graak_esm_mock_values__(${id});\n`;
+	if (hasDefault) source += "export default __m.defaultValue;\n";
+	if (named) {
+		for (const key of Object.keys(named)) {
+			if (key === "default") continue;
+			source += `export const ${key} = __m.named[${JSON.stringify(key)}];\n`;
+		}
+	}
+	for (const key of ids) esmModuleMockRegistry.set(key, source);
+	return id;
+}
+
+/** Undoes an ESM module mock installed by `mockEsmModule`. */
+function unmockEsmModule(ids, id) {
+	if (!hasEsmMockHook || id === undefined) return;
+	for (const key of ids) esmModuleMockRegistry.delete(key);
+	esmMockValues.delete(id);
 }
 
 function moduleNotFound(specifier, fromDir) {

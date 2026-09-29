@@ -2673,6 +2673,8 @@ function createTestModule(builtins, globalObject, moduleMockHooks) {
 		moduleCache: moduleMockHooks?.moduleCache,
 		mockCommonJsModule: moduleMockHooks?.mockCommonJsModule,
 		unmockCommonJsModule: moduleMockHooks?.unmockCommonJsModule,
+		mockEsmModule: moduleMockHooks?.mockEsmModule,
+		unmockEsmModule: moduleMockHooks?.unmockEsmModule,
 	});
 
 	const test = runInParentContext(Test);

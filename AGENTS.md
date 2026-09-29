@@ -126,7 +126,14 @@ Windows, cluster, wasi, repl and inspector are all closed; see the README's per-
 own small known gaps. `createSign`/`createVerify`/`crypto.sign`/`crypto.verify` with a BLAKE2 digest now match Node for RSA,
 classic DSA (both reject it) and ECDSA (Node signs and verifies with it like any other digest, and so does the host: the
 digest is computed in JavaScript and handed to mbedTLS as already-hashed bytes, since mbedTLS's own digest table has no
-BLAKE2 entry to compute it from the name).
+BLAKE2 entry to compute it from the name). `node:test`'s `mock.module` now covers ESM `import`/`import()` as well as
+CommonJS `require()`: the engine's native module loader (`fg_sea_module_loader` in `quickjs/native/fg_sea.c`, the only
+module loader installed and not SEA-only) calls back into JS for every import, and a mock hit is compiled the same way
+a real file is. Two narrow gaps remain, both because quickjs caches a loaded module by specifier at the engine level
+before the loader runs, and nothing outside quickjs.c can evict that cache: `cache: false` behaves like `cache: true`
+for ESM, and mocking a specifier some earlier import already resolved has no effect there (real Node's own loader can
+do both; this one can't without patching the vendored engine). Mocking before the first import of a specifier, the
+normal pattern, is unaffected by either.
 
 What is genuinely still absent, not just narrowed: `node:sqlite` extension loading (`enableLoadExtension`/`loadExtension` —
 `backup()` and `function()` are both implemented: `backup()` is rate-limited `sqlite3_backup_step` stepping driven from
@@ -135,10 +142,7 @@ function through `sqlite3_create_function_v2()`, with a C trampoline the same sh
 `sqlite3_value*` args converted to JSValues, `JS_Call`, the JSValue result converted back with `sqlite3_result_*` — and
 Node's own argument coercion, `deterministic`/`directOnly`/`varargs`/`useBigIntArguments` options and error propagation.
 Loading extensions needs neither: the bundled amalgamation is compiled with `SQLITE_OMIT_LOAD_EXTENSION`, and a static
-host has no `dlopen` to load one with regardless — the same limit as native addon loading below);
-`node:test`'s `mock.module` for ESM (`import`/`import()` go through the engine's native module loader, which no
-JS-only hook can intercept — CommonJS `require()` mocking is implemented, gated behind
-`--experimental-test-module-mocks` exactly as Node gates it, for CommonJS as well as ESM); the inspector's `Profiler`,
+host has no `dlopen` to load one with regardless — the same limit as native addon loading below); the inspector's `Profiler`,
 `HeapProfiler` and `Debugger` domains (quickjs has no debugger protocol or profiler to back them); and native addon
 loading on a static host (no dynamic loader there — the packager falls back to a dynamic host automatically). The legacy
 Windows path comes first.
