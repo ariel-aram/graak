@@ -132,8 +132,11 @@ What is genuinely still absent, not just narrowed: `node:sqlite` user-defined fu
 implemented: rate-limited `sqlite3_backup_step` stepping driven from JavaScript, with `progress`, `source`/`target` and
 Node's own validation and error shapes, so no C-callback-into-JS bridging was needed; `function()`, the scalar
 `sqlite3_create_function_v2` binding, is implemented and differentially verified on the `sqlite-function-pending-prebuilt`
-branch, not yet merged: this environment's egress policy blocks both `sqlite.org` and `musl.cc`, so no native host here
-can rebuild from source once `fg_sqlite.c` changes, prebuilt or not — merge it on a machine that can reach both);
+branch, not yet merged: `apt-get install mingw-w64 musl-tools` gets the Windows and `linux-x64*` cross toolchains this
+environment needs (`musl-tools` only covers the x64 target, not `linux-x86*`), but `www.sqlite.org` itself is denied by
+egress policy, and `quickjs/native/build.sh` fetches the SQLite amalgamation from there with no fallback -- no native
+host here can rebuild from source once `fg_sqlite.c` changes, prebuilt or not, until that fetch succeeds. Do not route
+around it with an unofficial mirror of the amalgamation; merge this branch on a machine that can reach sqlite.org);
 `node:test`'s `mock.module` for ESM (`import`/`import()` go through the engine's native module loader, which no
 JS-only hook can intercept — CommonJS `require()` mocking is implemented, gated behind
 `--experimental-test-module-mocks` exactly as Node gates it, for CommonJS as well as ESM); the inspector's `Profiler`,
