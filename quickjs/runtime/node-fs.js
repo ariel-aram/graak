@@ -555,7 +555,10 @@ function createFs({ os, std, Buffer, path, stream, EventEmitter, native, platfor
 		return link;
 	}
 	function linkSync(existing, file) {
-		copyFileSync(existing, file);
+		if (typeof native?.link !== "function") throw Object.assign(new Error("link is not available on this host"), { code: "ENOSYS" });
+		const target = toPath(existing, "existing"), dest = toPath(file, "newPath");
+		const rc = native.link(target, dest);
+		if (rc !== 0) throw fsError(rc, "link", target, dest);
 	}
 
 	function mkdtempSync(prefix) {

@@ -26,6 +26,11 @@ t("cp", () => { fs.cpSync(path.join(dir, "x"), path.join(dir, "x2"), { recursive
 t("fd", () => { const fd = fs.openSync(path.join(dir, "d.bin"), "w+"); fs.writeSync(fd, Buffer.from([1, 2, 3, 4, 5])); const b = Buffer.alloc(3); const n = fs.readSync(fd, b, 0, 3, 1); fs.closeSync(fd); return [n, [...b]]; });
 t("truncate", () => { fs.truncateSync(path.join(dir, "d.bin"), 2); return fs.statSync(path.join(dir, "d.bin")).size; });
 t("symlink", () => { fs.symlinkSync(path.join(dir, "b.txt"), path.join(dir, "ln")); return [fs.lstatSync(path.join(dir, "ln")).isSymbolicLink(), fs.readlinkSync(path.join(dir, "ln")).replace(dir, "<dir>"), fs.readFileSync(path.join(dir, "ln"), "utf8")]; });
+t("link", () => { fs.writeFileSync(path.join(dir, "hl-src.txt"), "hardlink data"); fs.linkSync(path.join(dir, "hl-src.txt"), path.join(dir, "hl-link.txt")); return [fs.statSync(path.join(dir, "hl-src.txt")).nlink, fs.statSync(path.join(dir, "hl-link.txt")).nlink, fs.readFileSync(path.join(dir, "hl-link.txt"), "utf8")]; });
+t("link write-through", () => { fs.writeFileSync(path.join(dir, "hl-link.txt"), "changed via link"); return fs.readFileSync(path.join(dir, "hl-src.txt"), "utf8"); });
+t("link survives unlink", () => { fs.unlinkSync(path.join(dir, "hl-src.txt")); return [fs.existsSync(path.join(dir, "hl-src.txt")), fs.readFileSync(path.join(dir, "hl-link.txt"), "utf8"), fs.statSync(path.join(dir, "hl-link.txt")).nlink]; });
+t("link eexist", () => fs.linkSync(path.join(dir, "hl-link.txt"), path.join(dir, "c.txt")));
+t("link enoent", () => fs.linkSync(path.join(dir, "hl-nope.txt"), path.join(dir, "hl-target.txt")));
 t("realpath", () => fs.realpathSync(path.join(dir, "x/../b.txt")).replace(fs.realpathSync(dir), "<dir>"));
 t("unlink dir", () => fs.unlinkSync(path.join(dir, "x")));
 t("rmdir nonempty", () => fs.rmdirSync(path.join(dir, "x")));

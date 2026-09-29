@@ -2114,6 +2114,65 @@ static JSValue fg_fsync(JSContext *ctx, JSValueConst this_val, int argc, JSValue
     return JS_NewInt32(ctx, rc == 0 ? 0 : -errno);
 }
 
+#ifdef _WIN32
+static wchar_t *fg_utf8_to_wide(const char *s); /* defined further down, alongside the other Windows exec/spawn helpers */
+
+/* Win32 error -> POSIX errno for CreateHardLinkW, the subset fg_link's callers (node-fs.js) branch on. */
+static int fg_win_link_errno(DWORD e)
+{
+    switch (e) {
+    case ERROR_FILE_NOT_FOUND:
+    case ERROR_PATH_NOT_FOUND:
+        return ENOENT;
+    case ERROR_ALREADY_EXISTS:
+    case ERROR_FILE_EXISTS:
+        return EEXIST;
+    case ERROR_ACCESS_DENIED:
+        return EACCES;
+    case ERROR_NOT_SAME_DEVICE:
+        return EXDEV;
+    case ERROR_INVALID_FUNCTION:
+    case ERROR_NOT_SUPPORTED:
+        return EPERM;
+    case ERROR_TOO_MANY_LINKS:
+        return EMLINK;
+    default:
+        return EINVAL;
+    }
+}
+#endif
+
+/* link(existing, newpath): a hard link, same inode. The engine's os module has symlink/readlink but no
+   hardlink primitive, so this fills the gap the same way chmod/ftruncate/fsync above do. */
+static JSValue fg_link(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    const char *existing = JS_ToCString(ctx, argv[0]);
+    const char *newpath;
+    int rc;
+    if (!existing) {
+        return JS_EXCEPTION;
+    }
+    newpath = JS_ToCString(ctx, argv[1]);
+    if (!newpath) {
+        JS_FreeCString(ctx, existing);
+        return JS_EXCEPTION;
+    }
+#ifdef _WIN32
+    {
+        wchar_t *wexisting = fg_utf8_to_wide(existing), *wnewpath = fg_utf8_to_wide(newpath);
+        BOOL ok = wexisting && wnewpath && CreateHardLinkW(wnewpath, wexisting, NULL);
+        rc = ok ? 0 : -fg_win_link_errno(GetLastError());
+        free(wexisting);
+        free(wnewpath);
+    }
+#else
+    rc = link(existing, newpath) == 0 ? 0 : -errno;
+#endif
+    JS_FreeCString(ctx, existing);
+    JS_FreeCString(ctx, newpath);
+    return JS_NewInt32(ctx, rc);
+}
+
 /* isProxy(value): whether it is a Proxy (JavaScript cannot tell, and util.types.isProxy is asked for by undici). */
 static JSValue fg_is_proxy(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -2732,6 +2791,7 @@ static const JSCFunctionListEntry fg_native_funcs[] = {
     JS_CFUNC_DEF("chmod", 2, fg_chmod),
     JS_CFUNC_DEF("ftruncate", 2, fg_ftruncate),
     JS_CFUNC_DEF("fsync", 1, fg_fsync),
+    JS_CFUNC_DEF("link", 2, fg_link),
 #ifdef _WIN32
     JS_CFUNC_DEF("exec", 2, fg_exec),
 #endif

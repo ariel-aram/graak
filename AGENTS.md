@@ -133,7 +133,11 @@ a real file is. Two narrow gaps remain, both because quickjs caches a loaded mod
 before the loader runs, and nothing outside quickjs.c can evict that cache: `cache: false` behaves like `cache: true`
 for ESM, and mocking a specifier some earlier import already resolved has no effect there (real Node's own loader can
 do both; this one can't without patching the vendored engine). Mocking before the first import of a specifier, the
-normal pattern, is unaffected by either.
+normal pattern, is unaffected by either. `fs.linkSync`/`fs.link`/`fs.promises.link` now create a real hard link (POSIX
+`link()`, or `CreateHardLinkW` on Windows, exposed as `fg_link` next to `fg_chmod`/`fg_ftruncate`/`fg_fsync` since the
+engine's own `os` module has no hardlink primitive) instead of silently copying the file's bytes into an independent
+one; this also fixes WASI's `path_link`, which called into `fs.linkSync` and previously copied the file as a result —
+the README's `wasi` row no longer lists that as a known gap.
 
 What is genuinely still absent, not just narrowed: `node:sqlite` extension loading (`enableLoadExtension`/`loadExtension` —
 `backup()` and `function()` are both implemented: `backup()` is rate-limited `sqlite3_backup_step` stepping driven from
