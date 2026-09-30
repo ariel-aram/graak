@@ -137,7 +137,12 @@ normal pattern, is unaffected by either. `fs.linkSync`/`fs.link`/`fs.promises.li
 `link()`, or `CreateHardLinkW` on Windows, exposed as `fg_link` next to `fg_chmod`/`fg_ftruncate`/`fg_fsync` since the
 engine's own `os` module has no hardlink primitive) instead of silently copying the file's bytes into an independent
 one; this also fixes WASI's `path_link`, which called into `fs.linkSync` and previously copied the file as a result —
-the README's `wasi` row no longer lists that as a known gap.
+the README's `wasi` row no longer lists that as a known gap. **`fg_link`'s C change landed without a prebuilt rebuild
+after it** (the sandbox that committed it had no musl-cross/mingw-w64 toolchain and no route to `www.sqlite.org`, which
+every target's build needs even for a glibc host): `quickjs/prebuilt/hosts/manifest.json`'s `sourceHash` still points at
+the source tree from before that commit, so `test/prebuilt.test.ts` fails and a packaged build falls back to compiling
+from source until someone with the toolchains runs `bun run prebuilts` and commits the regenerated hosts. Do that before
+any other C change lands, so the batch covers both.
 
 What is genuinely still absent, not just narrowed: `node:sqlite` extension loading (`enableLoadExtension`/`loadExtension` —
 `backup()` and `function()` are both implemented: `backup()` is rate-limited `sqlite3_backup_step` stepping driven from
