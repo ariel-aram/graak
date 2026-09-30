@@ -221,6 +221,11 @@ for (const [name, value] of Object.entries(CASES)) {
 }
 
 // Values that cannot be cloned.
+const revokedProxy = (() => {
+	const r = Proxy.revocable({}, {});
+	r.revoke();
+	return r.proxy;
+})();
 for (const [name, value] of Object.entries({
 	fn: () => 1,
 	symbol: Symbol("a"),
@@ -230,6 +235,22 @@ for (const [name, value] of Object.entries({
 	symbolObject: Object(Symbol()),
 	nestedFn: { a: () => 1 },
 	sab: new SharedArrayBuffer(2),
+	proxyObject: new Proxy({}, {}),
+	proxyArray: new Proxy([1, 2, 3], {}),
+	proxyMap: new Proxy(new Map(), {}),
+	proxySet: new Proxy(new Set(), {}),
+	proxyDate: new Proxy(new Date(), {}),
+	proxyRegExp: new Proxy(/x/, {}),
+	// A proxy wrapping a callable is not covered here: V8 always throws with the real target's own
+	// `Function.prototype.toString` output (peeked at through state JavaScript cannot see), which no
+	// engine can reproduce for a proxy without that same peek, so its message is not comparable.
+	proxyOfProxy: new Proxy(new Proxy({}, {}), {}),
+	proxyRevoked: revokedProxy,
+	proxyNestedInObject: { a: new Proxy({}, {}) },
+	proxyNestedInArray: [1, new Proxy({}, {})],
+	proxyNestedInMapKey: new Map([[new Proxy({}, {}), 1]]),
+	proxyNestedInMapValue: new Map([[1, new Proxy({}, {})]]),
+	proxyNestedInSet: new Set([new Proxy({}, {})]),
 })) {
 	console.log(`${name} ${attempt(() => hex(v8.serialize(value)))}`);
 }

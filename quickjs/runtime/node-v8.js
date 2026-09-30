@@ -12,7 +12,16 @@
  *   - an array holding only numbers of which one is not an int32 is written as doubles (V8's
  *     PACKED_DOUBLE_ELEMENTS),
  *   - a view over a resizable ArrayBuffer is "length tracking" when it reaches the end of the buffer,
- *   - proxies are not detected, and a RegExp is written with its `source`.
+ *   - a RegExp is written with its `source`,
+ *   - a Proxy (detected with `__graak_native.isProxy`) always throws, like V8, with a message built the
+ *     same way for every shape V8 special-cases (plain object, array, Map, Set, Date, RegExp, Error, a
+ *     revoked proxy) by reading only what an untrapped Proxy forwards safely (`instanceof`,
+ *     `constructor.name`, `Array.isArray`, `String()`). V8 builds its message by peeking at the real
+ *     target through state JavaScript cannot see; a Proxy wrapping a callable can't follow that: it is
+ *     already caught earlier (by `typeof value === "function"`) and reports this engine's own
+ *     `Function.prototype.toString` output for it, which does not reliably match V8's message text
+ *     (V8's own is the target's real source when it has one, and otherwise still differs from this
+ *     engine's own formatting for a function with none, e.g. a bound function).
  */
 
 import { inspect } from "./node-inspect.js";
@@ -62,6 +71,8 @@ const isTypedArray = (v) => {
 	}
 };
 const isError = (v) => (typeof Error.isError === "function" ? Error.isError(v) : toStr.call(v) === "[object Error]");
+const nativeIsProxy = globalThis.__graak_native?.isProxy;
+const isProxy = (v) => (v !== null && (typeof v === "object" || typeof v === "function") ? Boolean(nativeIsProxy?.(v)) : false);
 
 // Wire tags.
 const T = {
@@ -271,6 +282,27 @@ class Serializer {
 		return `#<${name}>`;
 	}
 
+	// A proxy wrapping a callable target is already caught by #writeObject's own `typeof value ===
+	// "function"` case (typeof sees straight through a Proxy's [[Call]] internal method), which formats
+	// it the same way as here, through #describe; that path never reaches this one.
+	#describeProxy(value) {
+		try {
+			Reflect.getPrototypeOf(value);
+		} catch {
+			// A revoked proxy's target is spec-mandated to become null; V8 reports that as the target.
+			return "null";
+		}
+		if (Array.isArray(value)) return "[object Array]";
+		if (value instanceof Error) {
+			try {
+				return String(value);
+			} catch {}
+		}
+		if (value instanceof Date) return "[object Date]";
+		if (value instanceof RegExp) return "[object RegExp]";
+		return this.#describe(value);
+	}
+
 	#writeString(text) {
 		let oneByte = true;
 		for (let i = 0; i < text.length; i++) {
@@ -348,6 +380,7 @@ class Serializer {
 				throw this.#cloneError(`${this.#describe(value)} could not be cloned.`);
 		}
 		if (value === null) return this.#tag(T.null);
+		if (isProxy(value)) throw this.#cloneError(`${this.#describeProxy(value)} could not be cloned.`);
 		return this.#writeReceiver(value);
 	}
 
