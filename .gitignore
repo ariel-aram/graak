@@ -12,6 +12,9 @@ tmp
 *.swp
 *.swo
 
+# Claude Code tooling state (e.g. agent worktrees)
+.claude/
+
 # Logs
 npm-debug.log*
 yarn-debug.log*
