@@ -146,7 +146,16 @@ any other C change lands, so the batch covers both. `generatePrime`/`generatePri
 too (and the `safe`-prime default of `rem = 3` Node applies when only `add` is given): mbedTLS's own prime search
 (`native.genPrime`) takes no congruence, so a candidate is drawn and nudged onto it in JavaScript, the same
 candidate-search-plus-`native.isPrime` shape `generateDsa` already uses above it in the same file; the plain and
-`safe`-only cases are unchanged and still go straight to `native.genPrime`.
+`safe`-only cases are unchanged and still go straight to `native.genPrime`. WASI's `fd_close` now closes the real host
+descriptor for a module's own inherited stdio (fd 0/1/2 of the process, used whenever `new WASI(...)` is given no
+`stdin`/`stdout`/`stderr` option), not only for a descriptor the WASI layer itself opened; the `owned` gate that used to
+skip inherited stdio stays for `fd_renumber`, an unrelated case with its own unresolved `EBADF` from real Node.
+**A sandbox with no musl-cross toolchain can't run the packaged-host side of any differential corpus at all**, not only
+one touching C: since the prebuilt manifest's `sourceHash` is stale (previous paragraph), the packager falls back to
+compiling `linux-x64` from source for every `bun run test` corpus, and that fails immediately with
+`x86_64-linux-musl-gcc is not installed` before it gets anywhere near the fixture being tested. A pure-JS runtime
+change (like the `fd_close` one above) can still be verified against real Node.js directly; treat the packaged-host
+side as blocked by the pending rebuild, not as a regression from the JS change, until the rebuild lands.
 
 What is genuinely still absent, not just narrowed: `node:sqlite` extension loading (`enableLoadExtension`/`loadExtension` —
 `backup()` and `function()` are both implemented: `backup()` is rate-limited `sqlite3_backup_step` stepping driven from

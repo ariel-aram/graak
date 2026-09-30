@@ -3,6 +3,7 @@
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const cp = require("node:child_process");
 const { WASI } = require("node:wasi");
 
 const out = [];
@@ -67,13 +68,29 @@ function startModule(ns, code, { exportName = "_start", withMemory = true, write
   return new Uint8Array([...header, ...types, ...imports, ...funcs, ...mem, ...exps, ...section(10, vec([[...leb(body.length), ...body]])), ...data]);
 }
 
-const warn = process.emitWarning;
-process.emitWarning = () => {};
+if (process.argv[2] === "default-stdio-child") {
+  // Forked in isolation (own fd 1, piped to the parent, never console.log'd directly): closes the module's own
+  // inherited stdout through WASI fd_close and reports what happened to the real OS descriptor via IPC, since fd 1
+  // itself is unusable for reporting once closed.
+  (async () => {
+    const wasi = new WASI({ version: "preview1", args: [], env: {}, returnOnExit: true });
+    const inst = (await WebAssembly.instantiate(trampoline("wasi_snapshot_preview1"), wasi.getImportObject())).instance;
+    wasi.finalizeBindings(inst);
+    const write = () => { try { fs.writeSync(1, "x"); return "ok"; } catch (e) { return e.code; } };
+    const before = write();
+    const errno = inst.exports.w_fd_close(1);
+    const after = write();
+    process.send({ before, errno, after });
+    process.exit(0);
+  })();
+} else {
+  const warn = process.emitWarning;
+  process.emitWarning = () => {};
 
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "wasi-corpus-"));
-const catchCode = (f) => { try { f(); return "ok"; } catch (e) { return e.code ?? e.name; } };
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "wasi-corpus-"));
+  const catchCode = (f) => { try { f(); return "ok"; } catch (e) { return e.code ?? e.name; } };
 
-(async () => {
+  (async () => {
   // ---- constructor and import object
   log("ctor", catchCode(() => new WASI({ version: "bogus" })), catchCode(() => new WASI({ version: "preview1", args: "x" })),
     catchCode(() => new WASI({ version: "preview1", env: 5 })), catchCode(() => new WASI({ version: "preview1", preopens: 5 })),
@@ -281,6 +298,18 @@ const catchCode = (f) => { try { f(); return "ok"; } catch (e) { return e.code ?
     log("read renumbered", en(sys("fd_read", h, P + 64, cnt, P)), get(B, dv().getUint32(P, true)));
     log("close", call("fd_close", h), call("fd_close", h), call("fd_close", 99));
     log("close stdio", call("fd_close", 0), call("fd_read", 0, P + 64, 1, P));
+    {
+      // Default (no stdin/stdout/stderr option) WASI stdio is the real process's own fd 0/1/2, so closing fd 1 for
+      // real here would kill this very script's own console.log output channel. Isolate it in a forked child whose
+      // fd 1 is a pipe nobody but this test reads, and report the outcome over IPC instead of stdout.
+      const child = cp.fork(__filename, ["default-stdio-child"], { stdio: ["ignore", "pipe", "pipe", "ipc"] });
+      const result = await new Promise((resolve) => {
+        let msg = null;
+        child.on("message", (m) => { msg = m; });
+        child.on("exit", () => resolve(msg));
+      });
+      log("fd_close default stdio", result);
+    }
     const [e4, r] = openPath(3, "d1/second.txt", 0, 0, 1, 0x2n);
     log("read-only open", en(e4), call("fd_write", r, P + 64, 1, P), call("fd_read", r, P + 64, cnt, P), call("fd_seek", r, 0, 0, P), call("fd_tell", r, P));
     log("rights narrow", call("fd_fdstat_set_rights", r, 0x2, 0), call("fd_fdstat_set_rights", r, 0x0, 0), call("fd_read", r, P + 64, cnt, P));
@@ -408,4 +437,5 @@ const catchCode = (f) => { try { f(); return "ok"; } catch (e) { return e.code ?
   fs.rmSync(tmp, { recursive: true, force: true });
   process.emitWarning = warn;
   console.log(out.join("\n"));
-})().catch((err) => { console.log(out.join("\n")); console.log("FAILED", err && err.stack); process.exit(1); });
+  })().catch((err) => { console.log(out.join("\n")); console.log("FAILED", err && err.stack); process.exit(1); });
+}

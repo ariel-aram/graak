@@ -551,7 +551,7 @@ export function createWasi({ fs, path, process, Buffer, os }) {
 			fd_close(fd) {
 				const entry = lookup(fd);
 				table.delete(u32(fd));
-				if (entry.host >= 0 && (entry.owned ?? entry.type === "file")) fs.closeSync(entry.host);
+				if (entry.host >= 0) fs.closeSync(entry.host);
 				return E.SUCCESS;
 			},
 			fd_datasync(fd) {
