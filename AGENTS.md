@@ -142,7 +142,11 @@ after it** (the sandbox that committed it had no musl-cross/mingw-w64 toolchain 
 every target's build needs even for a glibc host): `quickjs/prebuilt/hosts/manifest.json`'s `sourceHash` still points at
 the source tree from before that commit, so `test/prebuilt.test.ts` fails and a packaged build falls back to compiling
 from source until someone with the toolchains runs `bun run prebuilts` and commits the regenerated hosts. Do that before
-any other C change lands, so the batch covers both.
+any other C change lands, so the batch covers both. `generatePrime`/`generatePrimeSync` now honor `options.add`/`options.rem`
+too (and the `safe`-prime default of `rem = 3` Node applies when only `add` is given): mbedTLS's own prime search
+(`native.genPrime`) takes no congruence, so a candidate is drawn and nudged onto it in JavaScript, the same
+candidate-search-plus-`native.isPrime` shape `generateDsa` already uses above it in the same file; the plain and
+`safe`-only cases are unchanged and still go straight to `native.genPrime`.
 
 What is genuinely still absent, not just narrowed: `node:sqlite` extension loading (`enableLoadExtension`/`loadExtension` —
 `backup()` and `function()` are both implemented: `backup()` is rate-limited `sqlite3_backup_step` stepping driven from

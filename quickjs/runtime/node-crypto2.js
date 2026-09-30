@@ -1271,10 +1271,53 @@ function createAsymmetric({ native, Buffer, stream, toBytes, hashName, out, conc
 		if (ArrayBuffer.isView(candidate)) return new Uint8Array(candidate.buffer, candidate.byteOffset, candidate.byteLength);
 		throw invalidArg("candidate", "an instance of ArrayBuffer, SharedArrayBuffer, TypedArray, Buffer, DataView, or bigint", candidate);
 	};
+	// options.add/rem accept the same shapes as `candidate` in checkPrime, but must be non-negative
+	// (Node's own unsignedBigIntToBuffer rejects a negative bigint with this same ERR_OUT_OF_RANGE shape).
+	const primeParam = (name, value) => {
+		if (value === undefined) return undefined;
+		if (typeof value === "bigint") {
+			if (value < 0n) throw codeError(RangeError, "ERR_OUT_OF_RANGE", `The value of "${name}" is out of range. It must be >= 0. Received ${value}`);
+			return value;
+		}
+		if (value instanceof ArrayBuffer || (typeof SharedArrayBuffer !== "undefined" && value instanceof SharedArrayBuffer)) return bigOf(new Uint8Array(value));
+		if (ArrayBuffer.isView(value)) return bigOf(new Uint8Array(value.buffer, value.byteOffset, value.byteLength));
+		throw invalidArg(name, "an instance of ArrayBuffer, SharedArrayBuffer, TypedArray, Buffer, DataView, or bigint", value);
+	};
+	// A random `bits`-bit value with the top bit forced set, so it always has the exact bit length
+	// (same masking as generateDsa's random(bits) above, plus the top-bit OR so the length is exact).
+	const randomBits = (bits) => {
+		const bytes = new Uint8Array(native.randomBytes((bits + 7) >> 3));
+		const top = bits % 8;
+		if (top) bytes[0] &= (1 << top) - 1;
+		return bigOf(bytes) | (1n << BigInt(bits - 1));
+	};
+	// No native primitive searches for a congruence, so the candidates are drawn and adjusted here, the
+	// same shape as generateDsa's search above: random bits-length candidate, nudge it onto add/rem, then
+	// hand it to native.isPrime (and, for a safe prime, to (candidate-1)/2 as well).
+	const generateConstrainedPrime = (bits, safe, add, rem) => {
+		for (;;) {
+			let candidate = randomBits(bits);
+			candidate += ((rem - candidate) % add + add) % add;
+			if (candidate.toString(2).length !== bits) continue;
+			if (!isProbablePrime(candidate)) continue;
+			if (safe && !isProbablePrime((candidate - 1n) >> 1n)) continue;
+			return candidate;
+		}
+	};
 	const generatePrimeSync = (size, options = {}) => {
 		if (!Number.isInteger(size) || size < 1) throw codeError(RangeError, "ERR_OUT_OF_RANGE", `The value of "size" is out of range. It must be >= 1. Received ${size}`);
-		if (options.add !== undefined || options.rem !== undefined) throw unavailable("generatePrime with add/rem", "constrained prime generation is not implemented");
-		const bytes = native.genPrime(size, Boolean(options.safe));
+		const safe = Boolean(options.safe);
+		const add = primeParam("options.add", options.add);
+		// options.rem is ignored (not an error) when options.add is not given - it has nothing to be relative to.
+		const userRem = add === undefined ? undefined : primeParam("options.rem", options.rem);
+		if (add !== undefined) {
+			// Node's own two guards against a congruence that can never be satisfied, which would otherwise spin
+			// forever below: add has to fit in `size` bits, and an explicit rem has to be smaller than add.
+			if (add.toString(2).length > size) throw codeError(RangeError, "ERR_OUT_OF_RANGE", "invalid options.add");
+			if (userRem !== undefined && add <= userRem) throw codeError(RangeError, "ERR_OUT_OF_RANGE", "invalid options.rem");
+		}
+		const rem = userRem ?? (safe ? 3n : 1n);
+		const bytes = add === undefined ? native.genPrime(size, safe) : bytesOfBig(generateConstrainedPrime(size, safe, add, rem));
 		if (options.bigint) return bigOf(bytes);
 		return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
 	};

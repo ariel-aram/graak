@@ -176,6 +176,21 @@ line("generatePrime safe", [safe.toString(2).length, crypto.checkPrimeSync(safe)
 asyncSteps.push((next) => crypto.generatePrime(40, { bigint: true }, (err, prime) => (line("generatePrime async", [String(err), crypto.checkPrimeSync(prime)]), next())));
 asyncSteps.push((next) => crypto.checkPrime(13n, (err, ok) => (line("checkPrime async", [String(err), ok]), next())));
 attempt("generatePrime bad size", () => crypto.generatePrimeSync(0));
+const withAdd = crypto.generatePrimeSync(48, { add: 6n, bigint: true });
+line("generatePrime add", [withAdd.toString(2).length, crypto.checkPrimeSync(withAdd), withAdd % 6n]);
+const withAddRem = crypto.generatePrimeSync(48, { add: 10n, rem: 3n, bigint: true });
+line("generatePrime add rem", [withAddRem.toString(2).length, crypto.checkPrimeSync(withAddRem), withAddRem % 10n]);
+const safeAdd = crypto.generatePrimeSync(48, { add: 4n, safe: true, bigint: true });
+line("generatePrime safe add", [crypto.checkPrimeSync(safeAdd), crypto.checkPrimeSync((safeAdd - 1n) / 2n), safeAdd % 4n]);
+const safeAddRem = crypto.generatePrimeSync(48, { add: 24n, rem: 11n, safe: true, bigint: true });
+line("generatePrime safe add rem", [crypto.checkPrimeSync(safeAddRem), crypto.checkPrimeSync((safeAddRem - 1n) / 2n), safeAddRem % 24n]);
+const remOnly = crypto.generatePrimeSync(48, { rem: 3n, bigint: true });
+line("generatePrime rem without add", [typeof remOnly, remOnly.toString(2).length, crypto.checkPrimeSync(remOnly)]);
+asyncSteps.push((next) => crypto.generatePrime(40, { add: 6n, bigint: true }, (err, prime) => (line("generatePrime async add", [String(err), crypto.checkPrimeSync(prime), prime % 6n]), next())));
+attempt("generatePrime bad add type", () => crypto.generatePrimeSync(48, { add: [1, 2, 3] }));
+attempt("generatePrime negative add", () => crypto.generatePrimeSync(48, { add: -1n }));
+attempt("generatePrime add too big", () => crypto.generatePrimeSync(16, { add: 2n ** 16n }));
+attempt("generatePrime rem not below add", () => crypto.generatePrimeSync(48, { add: 10n, rem: 10n }));
 
 /* ---- key generation */
 const gen = crypto.generateKeyPairSync("rsa", { modulusLength: 1024, publicExponent: 3 });
